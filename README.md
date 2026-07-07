@@ -1,93 +1,79 @@
 # field_tomogram_reconstruction
 
+This is a MATLAB codebase for **Optical Diffraction Tomography (ODT)** — reconstructing 3D refractive index maps of biological samples (e.g., MDCK cells) from interferometric holographic measurements. The pipeline converts raw holographic tomograms into quantitative 3D refractive index volumes.
 
+## Running the Pipeline
 
-## Getting started
+This code runs on a HPC cluster (`/beegfs/home/ralajan/matlab/`). There is no build system; scripts are run directly in MATLAB. The main entry point is [field_retrieval_Tomogram_reconstruction.m](field_retrieval_Tomogram_reconstruction.m), which contains the full pipeline as sequential `%%` sections.
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
-
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
-
-## Add your files
-
-* [Create](https://docs.gitlab.com/user/project/repository/web_editor/#create-a-file) or [upload](https://docs.gitlab.com/user/project/repository/web_editor/#upload-a-file) files
-* [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
-
-```
-cd existing_repo
-git remote add origin https://gitlab.gwdg.de/raghava.alajangi/field_tomogram_reconstruction.git
-git branch -M main
-git push -uf origin main
+To run on the cluster:
+```matlab
+% Launch MATLAB and run:
+run('field_retrieval_Tomogram_reconstruction.m')
 ```
 
-## Integrate with your tools
+GPU (CUDA) is required — `gpuArray` is used extensively in `ODTReconstruction` and `ODTIteration`. The `unwrap2` function in [unwrap/](unwrap/) is a compiled MEX binary (`.mexw32`) for 2D phase unwrapping.
 
-* [Set up project integrations](https://gitlab.gwdg.de/raghava.alajangi/field_tomogram_reconstruction/-/settings/integrations)
+## Pipeline Architecture
 
-## Collaborate with your team
+The pipeline is structured as sequential `%%` sections in [field_retrieval_Tomogram_reconstruction.m](field_retrieval_Tomogram_reconstruction.m):
 
-* [Invite team members and collaborators](https://docs.gitlab.com/user/project/members/)
-* [Create a new merge request](https://docs.gitlab.com/user/project/merge_requests/creating_merge_requests/)
-* [Automatically close issues from merge requests](https://docs.gitlab.com/user/project/issues/managing_issues/#closing-issues-automatically)
-* [Enable merge request approvals](https://docs.gitlab.com/user/project/merge_requests/approvals/)
-* [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+### Stage 1: Field Retrieval (lines 1–141)
+Iterates over `batch*/` directories, each containing `bg*_Tomog.mat` (background) and `sample*_Tomog.mat` (sample) files.
 
-## Test and Deploy
+- Finds the off-axis hologram carrier frequency via FFT peak detection
+- Applies a circular mask (`mk_ellipse`) to isolate the +1 diffraction order
+- Demodulates the complex field by shifting in Fourier space
+- Divides sample field by background field to extract relative phase/amplitude
+- Calls `PhiShift` → `unwrap2` → `phaseCompensation` to flatten and unwrap phase
+- Saves `retPhase` and `retAmplitude` as `Field_*_rev2.mat` in `field_retrieval/` subdirectory
 
-Use the built-in continuous integration in GitLab.
+### Stage 2: Tomogram Reconstruction (lines 143–235)
+- Loads field retrieval results, filters corrupted/outlier frames into `excludeFrame`
+- Calls `ODTReconstruction` to map Rytov fields into 3D Fourier space (the Ewald sphere mapping)
+- Calls `ODTIteration` for iterative constraint enforcement (non-negativity of refractive index)
+- Saves `Reconimg` (3D refractive index volume) as `Tomogram_*.mat`
 
-* [Get started with GitLab CI/CD](https://docs.gitlab.com/ci/quick_start/)
-* [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/user/application_security/sast/)
-* [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/topics/autodevops/requirements/)
-* [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/user/clusters/agent/)
-* [Set up protected environments](https://docs.gitlab.com/ci/environments/protected_environments/)
+### Stage 3: Tile Stitching (lines 237–348 and 371–556)
+- Two versions: v1 stitches full-volume tomograms; v2 (`_v3`) reconstructs per-tile then stitches
+- Bidirectional scan pattern: odd rows go left-to-right, even rows right-to-left
+- Registration uses `xcorr2` on image gradients to find sub-tile offsets
 
-***
+### Stage 4: Visualization (lines 671–785)
+- Displays orthogonal slices (XZ, YZ, XY) and maximum intensity projections
 
-# Editing this README
+## Key Functions
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+| File | Role |
+|------|------|
+| [ODTReconstruction.m](ODTReconstruction.m) | Ewald sphere mapping: fills 3D Fourier space from 2D holographic projections using Rytov approximation |
+| [ODTIteration.m](ODTIteration.m) | Iterative refinement: enforces `n >= n_m` (refractive index ≥ medium) as a physical constraint |
+| [PhiShift.m](PhiShift.m) | Removes linear phase tilt by fitting and subtracting a plane from border pixels |
+| [phaseCompensation.m](phaseCompensation.m) | Least-squares polynomial fit (degree `n`) to compensate residual phase aberrations; supports masked fitting to exclude cells |
 
-## Suggestions for a good README
+## Key Physical Parameters
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+These appear as variables throughout the pipeline and must be consistent:
+- `lambda` — illumination wavelength (in µm)
+- `NA` — numerical aperture of the objective
+- `res` — pixel size in µm
+- `n_m = 1.337` — refractive index of culture medium
+- `n_s` — expected refractive index of sample (cells ~1.37–1.38)
+- `ZP` — zero-padded FFT size (typically `round(1.2 * xx/2) * 2`)
 
-## Name
-Choose a self-explaining name for your project.
+## Data Layout
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+```
+/beegfs/home/ralajan/matlab/<experiment_date>/
+  batch01_*/
+    bg001_Tomog.mat          # background hologram stack (variable: tomogMap)
+    sample001_Tomog.mat      # sample hologram stack (variable: tomogMap)
+    field_retrieval/
+      Field_sample001_*_rev2.mat   # retPhase, retAmplitude, NA, lambda, res, ZP
+      Tomogram_Field_*_rev2.mat    # Reconimg, res3, res4, lambda
+      stitched_Tomogram.mat        # final stitched volume
+```
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+## Checkpoint System
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
-
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
-
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
-
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
-
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
-
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
-
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
-
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
-
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
-
-## License
-For open source projects, say how it is licensed.
-
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+Field retrieval saves checkpoint markers every 5 frames to `outDir/checkpoint_<baseName>_iter_<N>.mat`. On restart, these are not automatically used for resuming — re-running overwrites from the beginning.
