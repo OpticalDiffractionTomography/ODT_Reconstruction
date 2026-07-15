@@ -99,12 +99,13 @@ for sampleNum = 1:length(sampleList)
     subplot(224),imagesc(max(real(Reconimg),[],3),[1.337-0.005 n_s]),axis image, axis off
     colormap('jet')
 
-    fileName = strcat('Tomogram_', sName);
+    [~, baseName, ~] = fileparts(sName);
+    fileName = strcat('Tomogram_', baseName);
     matOut = fullfile(outDir, strcat(fileName, '.mat'));
     pngOut  = fullfile(outDir, strcat(fileName, '.png'));
     logfn(sprintf('  Saving: %s', matOut));
     save(matOut, 'Reconimg','res3','res4','lambda','excludeFrame');
-    print('-dpng', pngOut)
+    saveas(gcf, pngOut)
     logfn(sprintf('  Saved PNG: %s', pngOut));
     clf
 end

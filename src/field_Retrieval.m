@@ -127,12 +127,13 @@ for sampleNum = 1:length(sampleList)
     subplot(3,3,[7 9]),imagesc(squeeze(retPhase(:,end/2,:)),[-3 3])
     colormap('jet')
 
-    fileName = strcat('Field_', sName);
+    [~, baseName, ~] = fileparts(sName);
+    fileName = strcat('Field_', baseName);
     matOut = fullfile(outDir, strcat(fileName, '.mat'));
     pngOut  = fullfile(outDir, strcat(fileName, '.png'));
     logfn(sprintf('  Saving: %s', matOut));
     save(matOut, 'retAmplitude','retPhase','xSize','f_dx','f_dy','NA','lambda','res','ZP');
-    print('-dpng', pngOut)
+    saveas(gcf, pngOut)
     logfn(sprintf('  Saved PNG: %s', pngOut));
 end
 
@@ -152,7 +153,7 @@ for sampleNum = 1:length(fieldList)
 end
 ylim([-3 3]);
 inspectionPng = fullfile(outDir, 'Field_inspection.png');
-print('-dpng', inspectionPng)
+saveas(gcf, inspectionPng)
 logfn(sprintf('Inspection plot saved: %s', inspectionPng));
 
 logfn('=== field_Retrieval finished ===');

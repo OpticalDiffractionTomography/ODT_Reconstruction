@@ -39,6 +39,7 @@ module load cuda/11.6.0
 
 # Headless rendering: compute nodes have no display; use Qt offscreen plugin
 export QT_QPA_PLATFORM=offscreen
+unset DISPLAY
 
 REPO_DIR="${SLURM_SUBMIT_DIR}"
 SRC_DIR="${REPO_DIR}/src"
