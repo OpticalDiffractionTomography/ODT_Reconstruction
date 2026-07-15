@@ -1,9 +1,5 @@
 %% Tomogram Reconstruction
-clear all
-close all
-
-addpath(genpath('/beegfs/home/ralajan/matlab'))
-spath='/beegfs/home/ralajan/matlab/20260203_Cecile_MDCK'; %variable input
+% spath and addpath are provided by main.sh at invocation
 cd(spath);
 batchList=dir('batch*');
 for batchNum=1:length(batchList)

@@ -10,14 +10,16 @@ This is a MATLAB codebase for **Optical Diffraction Tomography (ODT)** — recon
 
 This code runs on an HPC cluster (`/beegfs/home/ralajan/matlab/`). There is no build system; scripts are run directly in MATLAB.
 
-**Current entry points (refactored, per-stage):**
-- [field_Retrieval.m](field_Retrieval.m) — Stage 1 only
-- [tomogram_Reconstruction.m](tomogram_Reconstruction.m) — Stage 2 only
+**Entry points (in `src/`):**
+- [src/field_Retrieval.m](src/field_Retrieval.m) — Stage 1 only
+- [src/tomogram_Reconstruction.m](src/tomogram_Reconstruction.m) — Stage 2 only
 
-**SLURM submission:**
+**SLURM submission (the only way to run):**
 ```bash
 sbatch main.sh --data_dir /beegfs/home/ralajan/matlab/<experiment_date>
 ```
+`main.sh` sets `addpath(genpath('./src'))` and passes `spath` to MATLAB before running each stage script. The stage scripts must **not** contain `clear all`, `addpath`, or a hardcoded `spath` — those are injected by `main.sh`.
+
 `main.sh` requests 1 RTX GPU, 8 CPUs, 64 GB RAM, 24 h walltime and runs both stages sequentially.
 
 **Legacy monolithic script** (all 4 stages, still the authoritative reference for stitching/visualization):
@@ -26,13 +28,13 @@ field_retrieval_Tomogram_reconstruction.asv
 ```
 
 GPU (CUDA) and MATLAB R2026a are required. External dependencies not in this repo:
-- `mk_ellipse` — creates circular/elliptical binary masks (called in `field_Retrieval.m` and `ODTReconstruction.m`)
+- `mk_ellipse` — creates circular/elliptical binary masks (called in `src/field_Retrieval.m` and `src/ODTReconstruction.m`)
 - `unwrap2` — compiled MEX binary (`.mexw32`) for 2D phase unwrapping; lives in `unwrap/` on the cluster
 - MATLAB toolboxes required: Image Processing, Parallel Computing (for `gpuArray`/`gather`), Signal Processing (for `xcorr2`)
 
 ## Pipeline Architecture
 
-### Stage 1: Field Retrieval ([field_Retrieval.m](field_Retrieval.m), 141 lines)
+### Stage 1: Field Retrieval ([src/field_Retrieval.m](src/field_Retrieval.m))
 
 Iterates over `batch*/` directories, each containing `bg*_Tomog.mat` (background) and `sample*_Tomog.mat` (sample) files.
 
@@ -42,7 +44,7 @@ Iterates over `batch*/` directories, each containing `bg*_Tomog.mat` (background
   - Second `phaseCompensation` call uses a cell-exclusion mask from top-hat morphological filtering (`imtophat` + `strel`)
 - Saves `retPhase`, `retAmplitude`, `NA`, `lambda`, `res`, `ZP`, `f_dx`, `f_dy` as `Field_*_rev2.mat` in `field_retrieval/`
 
-### Stage 2: Tomogram Reconstruction ([tomogram_Reconstruction.m](tomogram_Reconstruction.m), 80 lines)
+### Stage 2: Tomogram Reconstruction ([src/tomogram_Reconstruction.m](src/tomogram_Reconstruction.m))
 
 - Loads field retrieval outputs; detects outlier frames into `excludeFrame` (mean phase > 1.5, frame-to-frame diff > 0.1, NaN frames)
 - Builds `TomoParam` struct with all optical/geometric parameters (see Key Parameters below)
@@ -65,10 +67,10 @@ Iterates over `batch*/` directories, each containing `bg*_Tomog.mat` (background
 
 | File | Role |
 |------|------|
-| [ODTReconstruction.m](ODTReconstruction.m) | Ewald sphere mapping: fills 3D Fourier volume `[ZP2 × ZP2 × ZP3]` from 2D Rytov scattered fields; uses `gpuArray` throughout |
-| [ODTIteration.m](ODTIteration.m) | Iterative projection: enforces `n >= n_m` constraint, replaces measured Fourier voxels from `ORytov` each iteration |
-| [PhiShift.m](PhiShift.m) | Removes linear phase tilt by fitting a plane to 4-pixel-wide border strips |
-| [phaseCompensation.m](phaseCompensation.m) | Least-squares polynomial fit (degree `n`) for phase aberration compensation; optional `mask` arg excludes cell regions from the fit |
+| [src/ODTReconstruction.m](src/ODTReconstruction.m) | Ewald sphere mapping: fills 3D Fourier volume `[ZP2 × ZP2 × ZP3]` from 2D Rytov scattered fields; uses `gpuArray` throughout |
+| [src/ODTIteration.m](src/ODTIteration.m) | Iterative projection: enforces `n >= n_m` constraint, replaces measured Fourier voxels from `ORytov` each iteration |
+| [src/PhiShift.m](src/PhiShift.m) | Removes linear phase tilt by fitting a plane to 4-pixel-wide border strips |
+| [src/phaseCompensation.m](src/phaseCompensation.m) | Least-squares polynomial fit (degree `n`) for phase aberration compensation; optional `mask` arg excludes cell regions from the fit |
 
 ## Key Physical Parameters
 
@@ -109,4 +111,6 @@ Field retrieval writes checkpoint markers every 5 frames to `outDir/checkpoint_<
 
 ## Refactoring State
 
-The `src/` directory exists but is empty. The pipeline has been partially split from the monolithic `.asv` into `field_Retrieval.m` (Stage 1) and `tomogram_Reconstruction.m` (Stage 2), but Stages 3–4 (stitching and visualization) remain only in the `.asv` file. The function `ODTReconstruction_scale` referenced in `test.m` for tiled reconstruction does not exist in this repo.
+All source files live in `src/`. `main.sh` is the sole entry point — it calls `addpath(genpath('./src'))` and injects `spath` before running each stage script. Stage scripts must not set `clear all`, `addpath`, or `spath` themselves.
+
+Stages 3–4 (stitching and visualization) remain only in the `.asv` file and have not yet been split into `src/`. The function `ODTReconstruction_scale` referenced in `test.m` for tiled reconstruction does not exist in this repo.

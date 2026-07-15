@@ -1,8 +1,5 @@
-clear all
-close all
-addpath(genpath('/beegfs/home/ralajan/matlab'))
 %% Angle load
-spath='/beegfs/home/ralajan/matlab/20260203_Cecile_MDCK';
+% spath and addpath are provided by main.sh at invocation
 cd(spath);
 batchList=dir('batch*');
 for batchNum=1:length(batchList)
