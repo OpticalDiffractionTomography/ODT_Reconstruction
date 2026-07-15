@@ -1,5 +1,6 @@
 %% Field Retrieval
 % spath is provided by main.sh at invocation
+set(0, 'DefaultFigureVisible', 'off');  % headless: no display on compute nodes
 
 outDir = fullfile(spath, 'field_retrieval');
 if ~exist(outDir, 'dir')
