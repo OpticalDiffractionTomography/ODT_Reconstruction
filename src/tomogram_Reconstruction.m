@@ -6,7 +6,7 @@ outDir = fullfile(spath, 'field_retrieval');
 
 logFile = fullfile(outDir, 'tomogram_reconstruction.log');
 fid = fopen(logFile, 'w');
-logfn = @(msg) deal(fprintf(fid, '[%s] %s\n', datestr(now,'yyyy-mm-dd HH:MM:SS'), msg), fflush(fid));
+logfn = @(msg) fprintf(fid, '[%s] %s\n', datestr(now,'yyyy-mm-dd HH:MM:SS'), msg);
 logfn('=== tomogram_Reconstruction started ===');
 logfn(sprintf('spath: %s', spath));
 

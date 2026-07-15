@@ -9,7 +9,7 @@ end
 
 logFile = fullfile(outDir, 'field_retrieval.log');
 fid = fopen(logFile, 'w');
-logfn = @(msg) deal(fprintf(fid, '[%s] %s\n', datestr(now,'yyyy-mm-dd HH:MM:SS'), msg), fflush(fid));
+logfn = @(msg) fprintf(fid, '[%s] %s\n', datestr(now,'yyyy-mm-dd HH:MM:SS'), msg);
 logfn('=== field_Retrieval started ===');
 logfn(sprintf('spath: %s', spath));
 
