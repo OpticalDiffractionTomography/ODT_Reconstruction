@@ -98,15 +98,18 @@ for sampleNum = 1:length(sampleList)
     pngOut  = fullfile(outDir, strcat(fileName, '.png'));
     logfn(sprintf('  Saving: %s', matOut));
     save(matOut, 'Reconimg','res3','res4','lambda','excludeFrame');
-    logfn('  MAT file saved. Saving reconstruction figure...');
+    logfn('  MAT file saved. Saving reconstruction image...');
     try
-        figure(1);
-        subplot(221),imagesc(((1:ZP4)-ZP4/2)*res3,((1:ZP5)-ZP5/2)*res4,(real(squeeze(Reconimg(end/2+0,:,:)))'),[1.337-0.005 n_s]),axis image,colorbar
-        subplot(222),imagesc(((1:ZP4)-ZP4/2)*res3,((1:ZP5)-ZP5/2)*res4,(real(squeeze(Reconimg(:,end/2+0,:)))'),[1.337-0.005 n_s]),axis image,colorbar
-        subplot(223),imagesc(((1:ZP4)-ZP4/2)*res3,((1:ZP4)-ZP4/2)*res3,(real(squeeze(Reconimg(:,:,end/2+1)))),[1.337-0.005 n_s]),axis image,colorbar
-        subplot(224),imagesc(max(real(Reconimg),[],3),[1.337-0.005 n_s]),axis image, axis off
-        colormap('jet')
-        exportgraphics(gcf, pngOut)
+        clim = [1.337-0.005, n_s];
+        xz = mat2gray(real(squeeze(Reconimg(end/2+0,:,:)))', clim);
+        yz = mat2gray(real(squeeze(Reconimg(:,end/2+0,:)))', clim);
+        xy = mat2gray(real(squeeze(Reconimg(:,:,end/2+1))),   clim);
+        mip= mat2gray(max(real(Reconimg),[],3),               clim);
+        % pad panels to same height for horizontal concat
+        H = max([size(xz,1), size(yz,1), size(xy,1), size(mip,1)]);
+        pad = @(im) padarray(im, [H-size(im,1), 0], 0, 'post');
+        mosaic = [pad(xz), pad(yz); pad(xy), pad(mip)];
+        imwrite(ind2rgb(im2uint8(mosaic), jet(256)), pngOut);
         logfn(sprintf('  Saved PNG: %s', pngOut));
     catch ME
         logfn(sprintf('  WARNING: PNG save failed (%s) — continuing.', ME.message));
