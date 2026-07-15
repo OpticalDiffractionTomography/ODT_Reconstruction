@@ -5,7 +5,7 @@ set(0, 'DefaultFigureVisible', 'off');  % headless: no display on compute nodes
 outDir = fullfile(spath, 'field_retrieval');
 
 logFile = fullfile(outDir, 'tomogram_reconstruction.log');
-fid = fopen(logFile, 'a');
+fid = fopen(logFile, 'w');
 logfn = @(msg) fprintf(fid, '[%s] %s\n', datestr(now,'yyyy-mm-dd HH:MM:SS'), msg);
 logfn('=== tomogram_Reconstruction started ===');
 logfn(sprintf('spath: %s', spath));

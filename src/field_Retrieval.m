@@ -8,7 +8,7 @@ if ~exist(outDir, 'dir')
 end
 
 logFile = fullfile(outDir, 'field_retrieval.log');
-fid = fopen(logFile, 'a');
+fid = fopen(logFile, 'w');
 logfn = @(msg) fprintf(fid, '[%s] %s\n', datestr(now,'yyyy-mm-dd HH:MM:SS'), msg);
 logfn('=== field_Retrieval started ===');
 logfn(sprintf('spath: %s', spath));
