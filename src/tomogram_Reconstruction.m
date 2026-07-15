@@ -6,7 +6,7 @@ outDir = fullfile(spath, 'field_retrieval');
 
 logFile = fullfile(outDir, 'tomogram_reconstruction.log');
 fid = fopen(logFile, 'w');
-logfn = @(msg) fprintf(fid, '[%s] %s\n', datestr(now,'yyyy-mm-dd HH:MM:SS'), msg);
+logfn = @(msg) deal(fprintf(fid, '[%s] %s\n', datestr(now,'yyyy-mm-dd HH:MM:SS'), msg), fflush(fid));
 logfn('=== tomogram_Reconstruction started ===');
 logfn(sprintf('spath: %s', spath));
 
@@ -92,21 +92,25 @@ for sampleNum = 1:length(sampleList)
     ZP5 = round(size(Reconimg,3));
     logfn(sprintf('  Final Reconimg size: %dx%dx%d', ZP4, ZP4, ZP5));
 
-    figure(1),
-    subplot(221),imagesc(((1:ZP4)-ZP4/2)*res3,((1:ZP5)-ZP5/2)*res4,(real(squeeze(Reconimg(end/2+0,:,:)))'),[1.337-0.005 n_s]),axis image,colorbar
-    subplot(222),imagesc(((1:ZP4)-ZP4/2)*res3,((1:ZP5)-ZP5/2)*res4,(real(squeeze(Reconimg(:,end/2+0,:)))'),[1.337-0.005 n_s]),axis image,colorbar
-    subplot(223),imagesc(((1:ZP4)-ZP4/2)*res3,((1:ZP4)-ZP4/2)*res3,(real(squeeze(Reconimg(:,:,end/2+1)))),[1.337-0.005 n_s]),axis image,colorbar
-    subplot(224),imagesc(max(real(Reconimg),[],3),[1.337-0.005 n_s]),axis image, axis off
-    colormap('jet')
-
     [~, baseName, ~] = fileparts(sName);
     fileName = strcat('Tomogram_', baseName);
     matOut = fullfile(outDir, strcat(fileName, '.mat'));
     pngOut  = fullfile(outDir, strcat(fileName, '.png'));
     logfn(sprintf('  Saving: %s', matOut));
     save(matOut, 'Reconimg','res3','res4','lambda','excludeFrame');
-    exportgraphics(gcf, pngOut)
-    logfn(sprintf('  Saved PNG: %s', pngOut));
+    logfn('  MAT file saved. Saving reconstruction figure...');
+    try
+        figure(1);
+        subplot(221),imagesc(((1:ZP4)-ZP4/2)*res3,((1:ZP5)-ZP5/2)*res4,(real(squeeze(Reconimg(end/2+0,:,:)))'),[1.337-0.005 n_s]),axis image,colorbar
+        subplot(222),imagesc(((1:ZP4)-ZP4/2)*res3,((1:ZP5)-ZP5/2)*res4,(real(squeeze(Reconimg(:,end/2+0,:)))'),[1.337-0.005 n_s]),axis image,colorbar
+        subplot(223),imagesc(((1:ZP4)-ZP4/2)*res3,((1:ZP4)-ZP4/2)*res3,(real(squeeze(Reconimg(:,:,end/2+1)))),[1.337-0.005 n_s]),axis image,colorbar
+        subplot(224),imagesc(max(real(Reconimg),[],3),[1.337-0.005 n_s]),axis image, axis off
+        colormap('jet')
+        exportgraphics(gcf, pngOut)
+        logfn(sprintf('  Saved PNG: %s', pngOut));
+    catch ME
+        logfn(sprintf('  WARNING: PNG save failed (%s) — continuing.', ME.message));
+    end
     clf
 end
 

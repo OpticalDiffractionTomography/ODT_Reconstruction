@@ -9,7 +9,7 @@ end
 
 logFile = fullfile(outDir, 'field_retrieval.log');
 fid = fopen(logFile, 'w');
-logfn = @(msg) fprintf(fid, '[%s] %s\n', datestr(now,'yyyy-mm-dd HH:MM:SS'), msg);
+logfn = @(msg) deal(fprintf(fid, '[%s] %s\n', datestr(now,'yyyy-mm-dd HH:MM:SS'), msg), fflush(fid));
 logfn('=== field_Retrieval started ===');
 logfn(sprintf('spath: %s', spath));
 
@@ -119,42 +119,49 @@ for sampleNum = 1:length(sampleList)
     end
     logfn(sprintf('  All %d frames processed.', nFrames));
 
-    logfn('  Saving phase overview figure...');
-    figure(1),
-    for kk = 1:6
-        subplot(3,3,kk),imagesc(squeeze(retPhase(:,:,round(nFrames/6*kk))),[-3 3]),axis image,axis off
-    end
-    subplot(3,3,[7 9]),imagesc(squeeze(retPhase(:,end/2,:)),[-3 3])
-    colormap('jet')
-
     [~, baseName, ~] = fileparts(sName);
     fileName = strcat('Field_', baseName);
     matOut = fullfile(outDir, strcat(fileName, '.mat'));
     pngOut  = fullfile(outDir, strcat(fileName, '.png'));
     logfn(sprintf('  Saving: %s', matOut));
     save(matOut, 'retAmplitude','retPhase','xSize','f_dx','f_dy','NA','lambda','res','ZP');
-    exportgraphics(gcf, pngOut)
-    logfn(sprintf('  Saved PNG: %s', pngOut));
+    logfn('  MAT file saved. Saving phase overview figure...');
+    try
+        figure(1);
+        for kk = 1:6
+            subplot(3,3,kk),imagesc(squeeze(retPhase(:,:,round(nFrames/6*kk))),[-3 3]),axis image,axis off
+        end
+        subplot(3,3,[7 9]),imagesc(squeeze(retPhase(:,end/2,:)),[-3 3])
+        colormap('jet')
+        exportgraphics(gcf, pngOut)
+        logfn(sprintf('  Saved PNG: %s', pngOut));
+    catch ME
+        logfn(sprintf('  WARNING: PNG save failed (%s) — continuing.', ME.message));
+    end
 end
 
 %% Field inspection plot
 logfn('Generating field inspection plot...');
 fieldList = dir(fullfile(outDir, 'Field*.mat'));
 logfn(sprintf('Found %d Field*.mat file(s) for inspection.', length(fieldList)));
-figure(2), hold on
-for sampleNum = 1:length(fieldList)
-    load(fullfile(outDir, fieldList(sampleNum).name));
-    f_dx2 = f_dx-mean(f_dx(:));
-    f_dy2 = f_dy-mean(f_dy(:));
-    temp = mean(squeeze(mean(abs(retPhase),1)));
-    plot(temp,'or')
-    temp = temp-circshift(temp,1);
-    plot(temp,'og')
-end
-ylim([-3 3]);
 inspectionPng = fullfile(outDir, 'Field_inspection.png');
-saveas(gcf, inspectionPng)
-logfn(sprintf('Inspection plot saved: %s', inspectionPng));
+try
+    figure(2); hold on
+    for sampleNum = 1:length(fieldList)
+        load(fullfile(outDir, fieldList(sampleNum).name));
+        f_dx2 = f_dx-mean(f_dx(:));
+        f_dy2 = f_dy-mean(f_dy(:));
+        temp = mean(squeeze(mean(abs(retPhase),1)));
+        plot(temp,'or')
+        temp = temp-circshift(temp,1);
+        plot(temp,'og')
+    end
+    ylim([-3 3]);
+    exportgraphics(gcf, inspectionPng)
+    logfn(sprintf('Inspection plot saved: %s', inspectionPng));
+catch ME
+    logfn(sprintf('WARNING: inspection plot failed (%s) — continuing.', ME.message));
+end
 
 logfn('=== field_Retrieval finished ===');
 fclose(fid);
