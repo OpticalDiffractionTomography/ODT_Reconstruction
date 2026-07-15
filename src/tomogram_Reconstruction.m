@@ -105,7 +105,7 @@ for sampleNum = 1:length(sampleList)
     pngOut  = fullfile(outDir, strcat(fileName, '.png'));
     logfn(sprintf('  Saving: %s', matOut));
     save(matOut, 'Reconimg','res3','res4','lambda','excludeFrame');
-    saveas(gcf, pngOut)
+    exportgraphics(gcf, pngOut)
     logfn(sprintf('  Saved PNG: %s', pngOut));
     clf
 end

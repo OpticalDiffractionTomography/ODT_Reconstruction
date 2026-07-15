@@ -133,7 +133,7 @@ for sampleNum = 1:length(sampleList)
     pngOut  = fullfile(outDir, strcat(fileName, '.png'));
     logfn(sprintf('  Saving: %s', matOut));
     save(matOut, 'retAmplitude','retPhase','xSize','f_dx','f_dy','NA','lambda','res','ZP');
-    saveas(gcf, pngOut)
+    exportgraphics(gcf, pngOut)
     logfn(sprintf('  Saved PNG: %s', pngOut));
 end
 
