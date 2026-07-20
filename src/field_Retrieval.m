@@ -127,39 +127,31 @@ for sampleNum = 1:length(sampleList)
     save(matOut, 'retAmplitude','retPhase','xSize','f_dx','f_dy','NA','lambda','res','ZP');
     logfn('  MAT file saved. Saving phase overview image...');
     try
-        cmap = jet(256);
-        GAP  = 10;
-        CBAR = 16;
+        cmap    = jet(256);
+        GAP     = 20;       % white gap between panels (px)
         clim_ph = [-3 3];
         toRGB   = @(im) ind2rgb(im2uint8(mat2gray(im, clim_ph)), cmap);
-        addCbar = @(rgb, h) [rgb, ones(h, GAP, 3), ...
-            ind2rgb(im2uint8(repmat(linspace(1,0,h)', 1, CBAR)), cmap)];
 
+        % 6 square phase panels — resize all to same size
+        P = 300;   % each panel size in pixels
         panels = cell(1,6);
         for kk = 1:6
-            panels{kk} = toRGB(squeeze(retPhase(:,:,round(nFrames/6*kk))));
+            panels{kk} = imresize(toRGB(squeeze(retPhase(:,:,round(nFrames/6*kk)))), [P P]);
         end
-        Ph = size(panels{1},1); Pw = size(panels{1},2);
-        hgap = ones(Ph, GAP, 3);
-        row1 = [addCbar(panels{1},Ph), hgap, addCbar(panels{2},Ph), hgap, addCbar(panels{3},Ph)];
-        row2 = [addCbar(panels{4},Ph), hgap, addCbar(panels{5},Ph), hgap, addCbar(panels{6},Ph)];
 
-        strip    = toRGB(squeeze(retPhase(:,end/2,:)));
-        stripW   = size(row1,2);
-        strip_rs = imresize(strip, [Ph*2, stripW]);
-        strip_cb = addCbar(strip_rs, Ph*2);
-        strip_cb = strip_cb(:, 1:size(row1,2)+GAP+CBAR, :);
+        hgap = ones(P, GAP, 3);
+        row1 = [panels{1}, hgap, panels{2}, hgap, panels{3}];
+        row2 = [panels{4}, hgap, panels{5}, hgap, panels{6}];
 
-        vgap  = ones(GAP, size(row1,2), 3);
-        vgap2 = ones(GAP, size(strip_cb,2), 3);
-        % align widths
-        W1 = size(row1,2); W2 = size(strip_cb,2);
-        Wmax = max(W1,W2);
-        row1     = padarray(row1,     [0, Wmax-W1], 1, 'post');
-        row2     = padarray(row2,     [0, Wmax-W1], 1, 'post');
-        strip_cb = padarray(strip_cb, [0, Wmax-W2], 1, 'post');
-        vgap     = ones(GAP, Wmax, 3);
-        mosaic   = [row1; vgap; row2; vgap; strip_cb];
+        % kymograph strip: same total width as the two rows, natural height
+        rowW  = size(row1, 2);
+        strip = toRGB(squeeze(retPhase(:,end/2,:)));
+        kymoH = round(rowW * size(strip,1) / size(strip,2));  % preserve aspect ratio
+        kymoH = max(kymoH, 120);
+        strip_rs = imresize(strip, [kymoH, rowW]);
+
+        vgap   = ones(GAP, rowW, 3);
+        mosaic = [row1; vgap; row2; vgap; strip_rs];
         imwrite(mosaic, pngOut);
         logfn(sprintf('  Saved PNG: %s', pngOut));
     catch ME
