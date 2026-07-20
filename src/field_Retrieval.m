@@ -156,6 +156,7 @@ for sampleNum = 1:length(sampleList)
     fileName = strcat('Field_', baseName);
     matOut = fullfile(outDir, strcat(fileName, '.mat'));
     pngOut  = fullfile(outDir, strcat(fileName, '.png'));
+    xSize = ii;  % original hologram pixel dimension; used downstream in tomogram_Reconstruction
     logfn(sprintf('  Saving: %s', matOut));
     save(matOut, 'retAmplitude','retPhase','xSize','f_dx','f_dy','NA','lambda','res','ZP');
     logfn('  MAT file saved. Saving phase overview image...');
