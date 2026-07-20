@@ -7,9 +7,9 @@
 #SBATCH --gres=gpu:rtx:1              # Request 1 RTX GPU
 #SBATCH --nodes=1                     # Run on a single node
 #SBATCH --ntasks=1                    # Run a single task
-#SBATCH --cpus-per-task=8             # CPU cores = parpool workers (field retrieval)
+#SBATCH --cpus-per-task=16            # 15 parfor workers + 1 main thread
 #SBATCH --time=24:00:00               # Max runtime (HH:MM:SS)
-#SBATCH --mem=64G                     # RAM: parallel workers each load a tomogMap
+#SBATCH --mem=128G                    # RAM: 16 workers each hold a full double tomogMap in flight
 #SBATCH --mail-type=all               # Email notifications for start/end/fail
 #SBATCH --mail-user=raghava.alajangi@mpzpm.mpg.de
 

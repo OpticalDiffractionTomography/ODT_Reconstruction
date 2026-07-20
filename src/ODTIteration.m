@@ -1,24 +1,30 @@
+function Reconimg = ODTIteration(Reconimg, ORytov, TP, IterNum)
 
-function Reconimg= ODTIteration(Reconimg,ORytov,TP,IterNum)
-ORytov_index=(find(abs(ORytov)>0));
-ORytov=ORytov(ORytov_index);
-normFact=1./(TP.res3^2*TP.res4);
+ORytov_index = find(abs(ORytov) > 0);
+ORytov       = ORytov(ORytov_index);
+
+% Precompute loop-invariant scalars on GPU
+normFact  = 1 / (TP.res3^2 * TP.res4);
+rytovScale = (TP.lambda / (TP.n_m * 2*pi))^2;  % used in sqrt step
+chiScale   = -(2*pi*TP.n_m / TP.lambda)^2;     % forward scattering potential
+nm_inv2    = 1 / TP.n_m^2;
+
 for mm = 1:IterNum
-    id = (real(Reconimg)<TP.n_m);
-%     subplot(223),imagesc(real(squeeze(Reconimg(:,:,1))),[1.33 1.35]),axis image
-    Reconimg(id)=TP.n_m-1i*imag(Reconimg(id));
-%     subplot(224),imagesc(real(squeeze(Reconimg(:,:,1))),[1.33 1.35]),axis image
-    
-    clear id;
-    Reconimg=-(2*pi*TP.n_m/TP.lambda)^2.*(Reconimg.^2/TP.n_m^2-1);
-    ORytov_new=fftshift(fftn(Reconimg))/normFact;
-    %         ORytov_new=ORytov_new.*ORytov_index+ORytov;
-%     subplot(221),imagesc(log10(abs(squeeze(ORytov_new(:,end/2,:))))),axis image
-    ORytov_new(ORytov_index)=ORytov;
-%     subplot(222),imagesc(log10(abs(squeeze(ORytov_new(:,end/2,:))))),axis image,title(num2str(mm))
-    Reconimg=(ifftn(ifftshift(ORytov_new)))*normFact;
-    Reconimg=TP.n_m*sqrt(1-Reconimg.*(TP.lambda/(TP.n_m*2*pi))^2);
-%     pause()
+    % Physical constraint: real(n) >= n_m
+    id = real(Reconimg) < TP.n_m;
+    Reconimg(id) = TP.n_m - 1i*imag(Reconimg(id));
+
+    % Convert RI to scattering potential chi
+    Reconimg = chiScale .* (Reconimg.^2 * nm_inv2 - 1);
+
+    % Project onto measured Fourier voxels
+    ORytov_new = fftshift(fftn(Reconimg)) / normFact;
+    ORytov_new(ORytov_index) = ORytov;
+
+    % Back to RI
+    Reconimg = ifftn(ifftshift(ORytov_new)) * normFact;
+    Reconimg = TP.n_m * sqrt(1 - Reconimg * rytovScale);
 end
-Reconimg=(gather(fftshift(Reconimg,3)));
+
+Reconimg = gather(fftshift(Reconimg, 3));
 return
