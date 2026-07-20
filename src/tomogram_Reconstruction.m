@@ -100,21 +100,42 @@ for sampleNum = 1:length(sampleList)
     save(matOut, 'Reconimg','res3','res4','lambda','excludeFrame');
     logfn('  MAT file saved. Saving reconstruction image...');
     try
-        clim = [1.337-0.005, n_s];
-        xz = mat2gray(real(squeeze(Reconimg(end/2+0,:,:)))', clim);
-        yz = mat2gray(real(squeeze(Reconimg(:,end/2+0,:)))', clim);
-        xy = mat2gray(real(squeeze(Reconimg(:,:,end/2+1))),   clim);
-        mip= mat2gray(max(real(Reconimg),[],3),               clim);
-        % pad panels to same height for horizontal concat
-        H = max([size(xz,1), size(yz,1), size(xy,1), size(mip,1)]);
-        pad = @(im) padarray(im, [H-size(im,1), 0], 0, 'post');
-        mosaic = [pad(xz), pad(yz); pad(xy), pad(mip)];
-        imwrite(ind2rgb(im2uint8(mosaic), jet(256)), pngOut);
+        clim  = [1.337-0.005, n_s];
+        cmap  = jet(256);
+        GAP   = 12;   % white pixels between panels
+        CBAR  = 20;   % colorbar strip width in pixels
+
+        % helper: float image -> uint8 indexed, then RGB with colorbar strip
+        toRGB = @(im) ind2rgb(im2uint8(mat2gray(im, clim)), cmap);
+        addCbar = @(rgb, h) [rgb, ones(h, GAP, 3), ...
+            ind2rgb(im2uint8(repmat(linspace(1,0,h)', 1, CBAR)), cmap)];
+
+        xz  = real(squeeze(Reconimg(end/2,:,:)))';
+        yz  = real(squeeze(Reconimg(:,end/2,:)))';
+        xy  = real(squeeze(Reconimg(:,:,end/2+1)));
+        mip = max(real(Reconimg), [], 3);
+
+        % make each panel same height by padding bottom with white
+        Hs = max([size(xz,1), size(yz,1), size(xy,1), size(mip,1)]);
+        Ws = max([size(xz,2), size(yz,2), size(xy,2), size(mip,2)]);
+        padim = @(im) padarray(toRGB(im), [Hs-size(im,1), Ws-size(im,2)], 1, 'post');
+
+        p_xz  = addCbar(padim(xz),  Hs);
+        p_yz  = addCbar(padim(yz),  Hs);
+        p_xy  = addCbar(padim(xy),  Hs);
+        p_mip = addCbar(padim(mip), Hs);
+
+        hgap = ones(Hs, GAP, 3);
+        row1 = [p_xz, hgap, p_yz];
+        row2 = [p_xy, hgap, p_mip];
+
+        vgap = ones(GAP, size(row1,2), 3);
+        mosaic = [row1; vgap; row2];
+        imwrite(mosaic, pngOut);
         logfn(sprintf('  Saved PNG: %s', pngOut));
     catch ME
         logfn(sprintf('  WARNING: PNG save failed (%s) — continuing.', ME.message));
     end
-    clf
 end
 
 logfn('=== tomogram_Reconstruction finished ===');

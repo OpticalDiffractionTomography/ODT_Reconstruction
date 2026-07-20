@@ -127,14 +127,40 @@ for sampleNum = 1:length(sampleList)
     save(matOut, 'retAmplitude','retPhase','xSize','f_dx','f_dy','NA','lambda','res','ZP');
     logfn('  MAT file saved. Saving phase overview image...');
     try
-        nF = nFrames;
-        slices = arrayfun(@(k) mat2gray(squeeze(retPhase(:,:,round(nF/6*k))), [-3 3]), 1:6, 'UniformOutput', false);
-        strip  = mat2gray(squeeze(retPhase(:,end/2,:)), [-3 3]);
-        row1   = [slices{1}, slices{2}, slices{3}];
-        row2   = [slices{4}, slices{5}, slices{6}];
-        row3   = imresize(strip, [size(row1,1), size(row1,2)]);
-        mosaic = [row1; row2; row3];
-        imwrite(ind2rgb(im2uint8(mosaic), jet(256)), pngOut);
+        cmap = jet(256);
+        GAP  = 10;
+        CBAR = 16;
+        clim_ph = [-3 3];
+        toRGB   = @(im) ind2rgb(im2uint8(mat2gray(im, clim_ph)), cmap);
+        addCbar = @(rgb, h) [rgb, ones(h, GAP, 3), ...
+            ind2rgb(im2uint8(repmat(linspace(1,0,h)', 1, CBAR)), cmap)];
+
+        panels = cell(1,6);
+        for kk = 1:6
+            panels{kk} = toRGB(squeeze(retPhase(:,:,round(nFrames/6*kk))));
+        end
+        Ph = size(panels{1},1); Pw = size(panels{1},2);
+        hgap = ones(Ph, GAP, 3);
+        row1 = [addCbar(panels{1},Ph), hgap, addCbar(panels{2},Ph), hgap, addCbar(panels{3},Ph)];
+        row2 = [addCbar(panels{4},Ph), hgap, addCbar(panels{5},Ph), hgap, addCbar(panels{6},Ph)];
+
+        strip    = toRGB(squeeze(retPhase(:,end/2,:)));
+        stripW   = size(row1,2);
+        strip_rs = imresize(strip, [Ph*2, stripW]);
+        strip_cb = addCbar(strip_rs, Ph*2);
+        strip_cb = strip_cb(:, 1:size(row1,2)+GAP+CBAR, :);
+
+        vgap  = ones(GAP, size(row1,2), 3);
+        vgap2 = ones(GAP, size(strip_cb,2), 3);
+        % align widths
+        W1 = size(row1,2); W2 = size(strip_cb,2);
+        Wmax = max(W1,W2);
+        row1     = padarray(row1,     [0, Wmax-W1], 1, 'post');
+        row2     = padarray(row2,     [0, Wmax-W1], 1, 'post');
+        strip_cb = padarray(strip_cb, [0, Wmax-W2], 1, 'post');
+        vgap     = ones(GAP, Wmax, 3);
+        mosaic   = [row1; vgap; row2; vgap; strip_cb];
+        imwrite(mosaic, pngOut);
         logfn(sprintf('  Saved PNG: %s', pngOut));
     catch ME
         logfn(sprintf('  WARNING: PNG save failed (%s) — continuing.', ME.message));
