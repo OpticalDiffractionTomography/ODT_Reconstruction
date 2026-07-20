@@ -100,37 +100,51 @@ for sampleNum = 1:length(sampleList)
     save(matOut, 'Reconimg','res3','res4','lambda','excludeFrame');
     logfn('  MAT file saved. Saving reconstruction image...');
     try
-        clim  = [1.337-0.005, n_s];
-        cmap  = jet(256);
-        GAP   = 12;   % white pixels between panels
-        CBAR  = 20;   % colorbar strip width in pixels
+        clim = [1.337-0.005, n_s];
+        cmap = jet(256);
+        GAP  = 30;    % white border/gap between panels (px)
+        CBAR = 24;    % colorbar strip width (px)
+        PH   = 300;   % fixed panel height — width scales with aspect ratio
 
-        % helper: float image -> uint8 indexed, then RGB with colorbar strip
-        toRGB = @(im) ind2rgb(im2uint8(mat2gray(im, clim)), cmap);
-        addCbar = @(rgb, h) [rgb, ones(h, GAP, 3), ...
-            ind2rgb(im2uint8(repmat(linspace(1,0,h)', 1, CBAR)), cmap)];
+        toRGB  = @(im) ind2rgb(im2uint8(mat2gray(im, clim)), cmap);
+        resizeH = @(im, h) imresize(toRGB(im), [h, round(h*size(im,2)/size(im,1))]);
 
         xz  = real(squeeze(Reconimg(end/2,:,:)))';
         yz  = real(squeeze(Reconimg(:,end/2,:)))';
         xy  = real(squeeze(Reconimg(:,:,end/2+1)));
         mip = max(real(Reconimg), [], 3);
 
-        % make each panel same height by padding bottom with white
-        Hs = max([size(xz,1), size(yz,1), size(xy,1), size(mip,1)]);
-        Ws = max([size(xz,2), size(yz,2), size(xy,2), size(mip,2)]);
-        padim = @(im) padarray(toRGB(im), [Hs-size(im,1), Ws-size(im,2)], 1, 'post');
+        p_xz  = resizeH(xz,  PH);
+        p_yz  = resizeH(yz,  PH);
+        p_xy  = resizeH(xy,  PH);
+        p_mip = resizeH(mip, PH);
 
-        p_xz  = addCbar(padim(xz),  Hs);
-        p_yz  = addCbar(padim(yz),  Hs);
-        p_xy  = addCbar(padim(xy),  Hs);
-        p_mip = addCbar(padim(mip), Hs);
+        % pad panels in each row to same width so rows can be stacked
+        W1 = max(size(p_xz,2),  size(p_yz,2));
+        W2 = max(size(p_xy,2),  size(p_mip,2));
+        Wmax = max(W1, W2);
+        wpad = @(im, w) padarray(im, [0, w-size(im,2)], 1, 'post');
+        p_xz  = wpad(p_xz,  Wmax);  p_yz  = wpad(p_yz,  Wmax);
+        p_xy  = wpad(p_xy,  Wmax);  p_mip = wpad(p_mip, Wmax);
 
-        hgap = ones(Hs, GAP, 3);
-        row1 = [p_xz, hgap, p_yz];
-        row2 = [p_xy, hgap, p_mip];
+        hgap = ones(PH,  GAP, 3);
+        vgap = ones(GAP, Wmax*2+GAP, 3);
 
-        vgap = ones(GAP, size(row1,2), 3);
-        mosaic = [row1; vgap; row2];
+        row1 = [p_xz,  hgap, p_yz];
+        row2 = [p_xy,  hgap, p_mip];
+
+        % single colorbar on the right, full height of both rows + gap
+        cbH  = PH*2 + GAP;
+        cbar = ind2rgb(im2uint8(repmat(linspace(1,0,cbH)', 1, CBAR)), cmap);
+
+        grid  = [row1; vgap; row2];
+        cbgap = ones(cbH, GAP, 3);
+        inner = [grid, cbgap, cbar];
+
+        BORDER = 40;
+        bH = size(inner,1); bW = size(inner,2);
+        mosaic = ones(bH+2*BORDER, bW+2*BORDER, 3);
+        mosaic(BORDER+1:BORDER+bH, BORDER+1:BORDER+bW, :) = inner;
         imwrite(mosaic, pngOut);
         logfn(sprintf('  Saved PNG: %s', pngOut));
     catch ME

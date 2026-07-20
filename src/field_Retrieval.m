@@ -144,14 +144,33 @@ for sampleNum = 1:length(sampleList)
         row2 = [panels{4}, hgap, panels{5}, hgap, panels{6}];
 
         % kymograph strip: same total width as the two rows, natural height
-        rowW  = size(row1, 2);
-        strip = toRGB(squeeze(retPhase(:,end/2,:)));
-        kymoH = round(rowW * size(strip,1) / size(strip,2));  % preserve aspect ratio
-        kymoH = max(kymoH, 120);
+        rowW     = size(row1, 2);
+        strip    = toRGB(squeeze(retPhase(:,end/2,:)));
+        kymoH    = round(rowW * size(strip,1) / size(strip,2));
+        kymoH    = max(kymoH, 120);
         strip_rs = imresize(strip, [kymoH, rowW]);
 
-        vgap   = ones(GAP, rowW, 3);
-        mosaic = [row1; vgap; row2; vgap; strip_rs];
+        % single colorbar right of kymograph
+        CBAR  = 20;
+        cbgap = ones(kymoH, GAP, 3);
+        cbar  = ind2rgb(im2uint8(repmat(linspace(1,0,kymoH)', 1, CBAR)), cmap);
+        strip_row = [strip_rs, cbgap, cbar];
+
+        % pad strip_row width to match rows if needed
+        Wgrid = size(row1,2);
+        Wstrip = size(strip_row,2);
+        if Wstrip < Wgrid
+            strip_row = padarray(strip_row, [0, Wgrid-Wstrip], 1, 'post');
+        end
+
+        vgap   = ones(GAP, size(row1,2), 3);
+        grid   = [row1; vgap; row2; vgap; strip_row];
+
+        % outer white border
+        BORDER = 40;
+        bH = size(grid,1); bW = size(grid,2);
+        mosaic = ones(bH+2*BORDER, bW+2*BORDER, 3);
+        mosaic(BORDER+1:BORDER+bH, BORDER+1:BORDER+bW, :) = grid;
         imwrite(mosaic, pngOut);
         logfn(sprintf('  Saved PNG: %s', pngOut));
     catch ME
