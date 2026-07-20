@@ -125,53 +125,47 @@ for sampleNum = 1:length(sampleList)
     pngOut  = fullfile(outDir, strcat(fileName, '.png'));
     logfn(sprintf('  Saving: %s', matOut));
     save(matOut, 'retAmplitude','retPhase','xSize','f_dx','f_dy','NA','lambda','res','ZP');
-    logfn('  MAT file saved. Saving phase overview image...');
+    logfn('  MAT file saved. Saving phase overview figure...');
     try
-        nF = nFrames;
-        slices = arrayfun(@(k) mat2gray(squeeze(retPhase(:,:,round(nF/6*k))), [-3 3]), 1:6, 'UniformOutput', false);
-        strip  = mat2gray(squeeze(retPhase(:,end/2,:)), [-3 3]);
-        row1   = [slices{1}, slices{2}, slices{3}];
-        row2   = [slices{4}, slices{5}, slices{6}];
-        row3   = imresize(strip, [size(row1,1), size(row1,2)]);
-        mosaic = [row1; row2; row3];
-        imwrite(ind2rgb(im2uint8(mosaic), jet(256)), pngOut);
+        fig = figure('Visible','off','Renderer','painters','Position',[0 0 1200 900]);
+        for kk = 1:6
+            subplot(3,3,kk)
+            imagesc(squeeze(retPhase(:,:,round(nFrames/6*kk))), [-3 3])
+            axis image; axis off; colorbar; colormap(jet)
+            title(sprintf('frame %d', round(nFrames/6*kk)))
+        end
+        subplot(3,3,[7 9])
+        imagesc(squeeze(retPhase(:,end/2,:)), [-3 3])
+        axis tight; colorbar; colormap(jet)
+        xlabel('frame'); ylabel('y (px)'); title('XT kymograph')
+        exportgraphics(fig, pngOut, 'Resolution', 150)
+        close(fig)
         logfn(sprintf('  Saved PNG: %s', pngOut));
     catch ME
         logfn(sprintf('  WARNING: PNG save failed (%s) — continuing.', ME.message));
     end
 end
 
-%% Field inspection plot (headless-safe: renders to pixel buffer, no Qt)
+%% Field inspection plot
 logfn('Generating field inspection plot...');
 fieldList = dir(fullfile(outDir, 'Field*.mat'));
 logfn(sprintf('Found %d Field*.mat file(s) for inspection.', length(fieldList)));
 inspectionPng = fullfile(outDir, 'Field_inspection.png');
 try
-    W = 800; H = 400;
-    canvas = ones(H, W, 3, 'uint8') * 255;  % white background
-    allTemp = {}; allDiff = {};
+    fig = figure('Visible','off','Renderer','painters','Position',[0 0 900 400]);
+    hold on
     for sampleNum = 1:length(fieldList)
         load(fullfile(outDir, fieldList(sampleNum).name), 'retPhase');
-        t = mean(squeeze(mean(abs(retPhase), 1)));
-        allTemp{end+1} = t;
-        allDiff{end+1} = t - circshift(t, 1);
+        temp = mean(squeeze(mean(abs(retPhase), 1)));
+        plot(temp, 'or', 'MarkerSize', 3)
+        temp = temp - circshift(temp, 1);
+        plot(temp, 'og', 'MarkerSize', 3)
     end
-    ymin = -3; ymax = 3;
-    for sampleNum = 1:length(allTemp)
-        t = allTemp{sampleNum};
-        d = allDiff{sampleNum};
-        N = length(t);
-        for fr = 1:N
-            px = round((fr-1)/(N-1) * (W-1)) + 1;
-            py_t = round((1 - (t(fr)-ymin)/(ymax-ymin)) * (H-1)) + 1;
-            py_d = round((1 - (d(fr)-ymin)/(ymax-ymin)) * (H-1)) + 1;
-            py_t = max(1, min(H, py_t));
-            py_d = max(1, min(H, py_d));
-            canvas(py_t, px, :) = reshape([255 0 0], 1, 1, 3);  % red: mean phase
-            canvas(py_d, px, :) = reshape([0 180 0], 1, 1, 3);  % green: diff
-        end
-    end
-    imwrite(canvas, inspectionPng);
+    ylim([-3 3]); xlabel('frame'); ylabel('mean |phase| (rad)')
+    legend({'mean |phase|','frame diff'}, 'Location','northeast')
+    title('Field inspection'); grid on
+    exportgraphics(fig, inspectionPng, 'Resolution', 150)
+    close(fig)
     logfn(sprintf('Inspection plot saved: %s', inspectionPng));
 catch ME
     logfn(sprintf('WARNING: inspection plot failed (%s) — continuing.', ME.message));
