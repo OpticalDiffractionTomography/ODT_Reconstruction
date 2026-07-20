@@ -151,10 +151,9 @@ for sampleNum = 1:length(sampleList)
         row1  = padarray(row1, [0, Wtotal-rowW], 1, 'post');
         row2  = padarray(row2, [0, Wtotal-rowW], 1, 'post');
 
-        % kymograph strip resized to rowW, then colorbar appended
-        strip    = toRGB(squeeze(retPhase(:,end/2,:)));
-        kymoH    = round(rowW * size(strip,1) / size(strip,2));
-        kymoH    = max(kymoH, 120);
+        % kymograph strip: fixed height, stretched to full rowW width
+        strip     = toRGB(squeeze(retPhase(:,end/2,:)));
+        kymoH     = 200;
         strip_rs  = imresize(strip, [kymoH, rowW]);
         cbgap_st  = ones(kymoH, GAP, 3);
         cbar_st   = ind2rgb(im2uint8(repmat(linspace(1,0,kymoH)', 1, CBAR)), cmap);
