@@ -139,32 +139,29 @@ for sampleNum = 1:length(sampleList)
             panels{kk} = imresize(toRGB(squeeze(retPhase(:,:,round(nFrames/6*kk)))), [P P]);
         end
 
-        hgap = ones(P, GAP, 3);
-        row1 = [panels{1}, hgap, panels{2}, hgap, panels{3}];
-        row2 = [panels{4}, hgap, panels{5}, hgap, panels{6}];
+        CBAR  = 20;
+        % total width = 3 panels + 2 gaps + gap + colorbar
+        rowW  = 3*P + 2*GAP;
+        Wtotal = rowW + GAP + CBAR;
 
-        % kymograph strip: same total width as the two rows, natural height
-        rowW     = size(row1, 2);
+        hgap  = ones(P, GAP, 3);
+        row1  = [panels{1}, hgap, panels{2}, hgap, panels{3}];
+        row2  = [panels{4}, hgap, panels{5}, hgap, panels{6}];
+        % pad rows to Wtotal
+        row1  = padarray(row1, [0, Wtotal-rowW], 1, 'post');
+        row2  = padarray(row2, [0, Wtotal-rowW], 1, 'post');
+
+        % kymograph strip resized to rowW, then colorbar appended
         strip    = toRGB(squeeze(retPhase(:,end/2,:)));
         kymoH    = round(rowW * size(strip,1) / size(strip,2));
         kymoH    = max(kymoH, 120);
-        strip_rs = imresize(strip, [kymoH, rowW]);
+        strip_rs  = imresize(strip, [kymoH, rowW]);
+        cbgap_st  = ones(kymoH, GAP, 3);
+        cbar_st   = ind2rgb(im2uint8(repmat(linspace(1,0,kymoH)', 1, CBAR)), cmap);
+        strip_row = [strip_rs, cbgap_st, cbar_st];  % width == Wtotal
 
-        % single colorbar right of kymograph
-        CBAR  = 20;
-        cbgap = ones(kymoH, GAP, 3);
-        cbar  = ind2rgb(im2uint8(repmat(linspace(1,0,kymoH)', 1, CBAR)), cmap);
-        strip_row = [strip_rs, cbgap, cbar];
-
-        % pad strip_row width to match rows if needed
-        Wgrid = size(row1,2);
-        Wstrip = size(strip_row,2);
-        if Wstrip < Wgrid
-            strip_row = padarray(strip_row, [0, Wgrid-Wstrip], 1, 'post');
-        end
-
-        vgap   = ones(GAP, size(row1,2), 3);
-        grid   = [row1; vgap; row2; vgap; strip_row];
+        vgap = ones(GAP, Wtotal, 3);
+        grid = [row1; vgap; row2; vgap; strip_row];
 
         % outer white border
         BORDER = 40;
