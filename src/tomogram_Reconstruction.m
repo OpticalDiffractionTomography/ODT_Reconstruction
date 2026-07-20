@@ -100,44 +100,50 @@ for sampleNum = 1:length(sampleList)
     save(matOut, 'Reconimg','res3','res4','lambda','excludeFrame');
     logfn('  MAT file saved. Saving reconstruction image...');
     try
-        clim = [1.337-0.005, n_s];
-        cmap = jet(256);
-        GAP  = 30;    % white border/gap between panels (px)
-        CBAR = 24;    % colorbar strip width (px)
-        PH   = 300;   % fixed panel height — width scales with aspect ratio
+        clim  = [1.337-0.005, n_s];
+        cmap  = jet(256);
+        GAP   = 30;     % gap between panels and border (px)
+        CBAR  = 24;     % colorbar width (px)
+        ROWW  = 900;    % target total width per row (both panels + gap)
+        PH2   = 400;    % row-2 panel height (XY / MIP — larger)
 
-        toRGB  = @(im) ind2rgb(im2uint8(mat2gray(im, clim)), cmap);
+        toRGB   = @(im) ind2rgb(im2uint8(mat2gray(im, clim)), cmap);
+        % resize panel to fixed height, preserving aspect ratio
         resizeH = @(im, h) imresize(toRGB(im), [h, round(h*size(im,2)/size(im,1))]);
+        % resize panel to fixed width
+        resizeW = @(im, w) imresize(toRGB(im), [round(w*size(im,1)/size(im,2)), w]);
 
         xz  = real(squeeze(Reconimg(end/2,:,:)))';
         yz  = real(squeeze(Reconimg(:,end/2,:)))';
         xy  = real(squeeze(Reconimg(:,:,end/2+1)));
         mip = max(real(Reconimg), [], 3);
 
-        p_xz  = resizeH(xz,  PH);
-        p_yz  = resizeH(yz,  PH);
-        p_xy  = resizeH(xy,  PH);
-        p_mip = resizeH(mip, PH);
+        % Row 1: XZ and YZ — each gets half of ROWW (minus gap)
+        panW1 = floor((ROWW - GAP) / 2);
+        p_xz  = resizeW(xz, panW1);
+        p_yz  = resizeW(yz, panW1);
+        PH1   = max(size(p_xz,1), size(p_yz,1));
+        wpad  = @(im, h) padarray(im, [h-size(im,1), 0], 1, 'post');
+        p_xz  = wpad(p_xz, PH1);  p_yz = wpad(p_yz, PH1);
+        hgap1 = ones(PH1, GAP, 3);
+        row1  = [p_xz, hgap1, p_yz];
 
-        % pad panels in each row to same width so rows can be stacked
-        W1 = max(size(p_xz,2),  size(p_yz,2));
-        W2 = max(size(p_xy,2),  size(p_mip,2));
-        Wmax = max(W1, W2);
-        wpad = @(im, w) padarray(im, [0, w-size(im,2)], 1, 'post');
-        p_xz  = wpad(p_xz,  Wmax);  p_yz  = wpad(p_yz,  Wmax);
-        p_xy  = wpad(p_xy,  Wmax);  p_mip = wpad(p_mip, Wmax);
+        % Row 2: XY and MIP — square panels at PH2 height, centered in ROWW
+        p_xy  = imresize(toRGB(xy),  [PH2 PH2]);
+        p_mip = imresize(toRGB(mip), [PH2 PH2]);
+        hgap2 = ones(PH2, GAP, 3);
+        row2_inner = [p_xy, hgap2, p_mip];
+        % center row2 within ROWW
+        pad2  = floor((ROWW - size(row2_inner,2)) / 2);
+        pad2  = max(pad2, 0);
+        row2  = [ones(PH2, pad2, 3), row2_inner, ones(PH2, ROWW-size(row2_inner,2)-pad2, 3)];
 
-        hgap = ones(PH,  GAP, 3);
-        vgap = ones(GAP, Wmax*2+GAP, 3);
-
-        row1 = [p_xz,  hgap, p_yz];
-        row2 = [p_xy,  hgap, p_mip];
-
-        % single colorbar on the right, full height of both rows + gap
-        cbH  = PH*2 + GAP;
-        cbar = ind2rgb(im2uint8(repmat(linspace(1,0,cbH)', 1, CBAR)), cmap);
-
+        vgap  = ones(GAP, ROWW, 3);
         grid  = [row1; vgap; row2];
+
+        % single colorbar on the right spanning full grid height
+        cbH   = size(grid, 1);
+        cbar  = ind2rgb(im2uint8(repmat(linspace(1,0,cbH)', 1, CBAR)), cmap);
         cbgap = ones(cbH, GAP, 3);
         inner = [grid, cbgap, cbar];
 
