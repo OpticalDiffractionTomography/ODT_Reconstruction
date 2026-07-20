@@ -98,30 +98,18 @@ for sampleNum = 1:length(sampleList)
     pngOut  = fullfile(outDir, strcat(fileName, '.png'));
     logfn(sprintf('  Saving: %s', matOut));
     save(matOut, 'Reconimg','res3','res4','lambda','excludeFrame');
-    logfn('  MAT file saved. Saving reconstruction figure...');
+    logfn('  MAT file saved. Saving reconstruction image...');
     try
         clim = [1.337-0.005, n_s];
-        xAx = ((1:ZP4)-ZP4/2)*res3;
-        zAx = ((1:ZP5)-ZP5/2)*res4;
-        fig = figure('Visible','off','Renderer','painters','Position',[0 0 1200 900]);
-        subplot(2,2,1)
-        imagesc(xAx, zAx, real(squeeze(Reconimg(end/2,:,:)))', clim)
-        axis image; colorbar; colormap(jet)
-        xlabel('x (µm)'); ylabel('z (µm)'); title('XZ slice')
-        subplot(2,2,2)
-        imagesc(xAx, zAx, real(squeeze(Reconimg(:,end/2,:)))', clim)
-        axis image; colorbar; colormap(jet)
-        xlabel('y (µm)'); ylabel('z (µm)'); title('YZ slice')
-        subplot(2,2,3)
-        imagesc(xAx, xAx, real(squeeze(Reconimg(:,:,end/2+1))), clim)
-        axis image; colorbar; colormap(jet)
-        xlabel('x (µm)'); ylabel('y (µm)'); title('XY slice')
-        subplot(2,2,4)
-        imagesc(max(real(Reconimg),[],3), clim)
-        axis image; axis off; colorbar; colormap(jet)
-        title('MIP (z)')
-        exportgraphics(fig, pngOut, 'Resolution', 150)
-        close(fig)
+        xz = mat2gray(real(squeeze(Reconimg(end/2+0,:,:)))', clim);
+        yz = mat2gray(real(squeeze(Reconimg(:,end/2+0,:)))', clim);
+        xy = mat2gray(real(squeeze(Reconimg(:,:,end/2+1))),   clim);
+        mip= mat2gray(max(real(Reconimg),[],3),               clim);
+        % pad panels to same height for horizontal concat
+        H = max([size(xz,1), size(yz,1), size(xy,1), size(mip,1)]);
+        pad = @(im) padarray(im, [H-size(im,1), 0], 0, 'post');
+        mosaic = [pad(xz), pad(yz); pad(xy), pad(mip)];
+        imwrite(ind2rgb(im2uint8(mosaic), jet(256)), pngOut);
         logfn(sprintf('  Saved PNG: %s', pngOut));
     catch ME
         logfn(sprintf('  WARNING: PNG save failed (%s) — continuing.', ME.message));
