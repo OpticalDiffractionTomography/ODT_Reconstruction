@@ -1,0 +1,142 @@
+%% Field Retrieval
+% spath is provided by main.sh at invocation
+set(0, 'DefaultFigureVisible', 'off');  % headless: no display on compute nodes
+
+outDir = fullfile(spath, 'field_retrieval');
+if ~exist(outDir, 'dir')
+    mkdir(outDir);
+end
+
+logFile = fullfile(outDir, 'field_retrieval.log');
+fid = fopen(logFile, 'w');
+logfn = @(msg) fprintf(fid, '[%s] %s\n', datestr(now,'yyyy-mm-dd HH:MM:SS'), msg);
+logfn('=== field_Retrieval started ===');
+logfn(sprintf('spath: %s', spath));
+
+%% Background loading
+logfn('Scanning for background files...');
+bglist = dir(fullfile(spath, 'bg*_Tomog.mat'));
+logfn(sprintf('Found %d background file(s). Loading: %s', length(bglist), bglist(1).name));
+f_dx = [];
+f_dy = [];
+load(fullfile(spath, bglist(1).name));
+img = double(squeeze(tomogMap(:,:,round(size(tomogMap,3)/3)-1)));
+img = squeeze(img);
+ii = length(img);
+ZP = ii;
+r = round(ZP*res*NA/lambda)+20;
+yr = r;
+logfn(sprintf('Image size: %d px | ZP=%d | r=%d | NA=%.3f | lambda=%.4f um | res=%.4f um', ii, ZP, r, NA, lambda, res));
+
+%% Carrier frequency detection from background frames
+logfn(sprintf('Detecting carrier frequency from %d background frames...', size(tomogMap,3)));
+for bgNum = 1:size(tomogMap,3)
+    img = double(squeeze(tomogMap(:,:,bgNum)));
+    [xSize ySize] = size(img);
+    Fimg = fftshift(fft2(img))/(xSize*ySize);
+    [f_x,f_y] = find(Fimg==max(max(Fimg(:, round(ii*0.01):round(ii*0.49)))));
+    f_dx = [f_dx; f_x];
+    f_dy = [f_dy; f_y];
+end
+mi = mean(f_dx);
+mj = mean(f_dy);
+mi = round(mi-ii/2-1); mj = round(mj-ii/2-1);
+logfn(sprintf('Carrier frequency offset: mi=%d px, mj=%d px', mi, mj));
+
+%% Build demodulation mask and background field stack
+logfn('Building demodulation mask (mk_ellipse)...');
+c1mask = ~(mk_ellipse(r-20,yr-20,ZP,ZP));
+c3mask = circshift(c1mask,[mi mj]);
+logfn(sprintf('Demodulating %d background frames...', size(tomogMap,3)));
+Fbg = zeros(round(2*r),round(2*r),size(tomogMap,3),'single');
+for bgNum = 1:size(tomogMap,3)
+    img = double(squeeze(tomogMap(:,:,bgNum)));
+    [xSize ySize] = size(img);
+    Fimg = fftshift(fft2(img))/(xSize*ySize);
+    Fimg = Fimg.*c3mask;
+    Fimg = circshift(Fimg,-[round(mi) round(mj)]);
+    Fimg = Fimg(ii/2-r+1:ii/2+r,ii/2-r+1:ii/2+r);
+    sizeFimg = length(Fimg);
+    Fimg = ifft2(ifftshift(Fimg))*(sizeFimg^2);
+    Fbg(:,:,bgNum) = Fimg;
+end
+logfn('Background field stack ready.');
+
+%% Per-sample field retrieval
+sampleList = dir(fullfile(spath, 'sample*_Tomog.mat'));
+logfn(sprintf('Found %d sample file(s).', length(sampleList)));
+
+for sampleNum = 1:length(sampleList)
+    sName = sampleList(sampleNum).name;
+    logfn(sprintf('--- Processing sample %d/%d: %s ---', sampleNum, length(sampleList), sName));
+
+    logfn(sprintf('  Loading %s...', sName));
+    load(fullfile(spath, sName));
+    nFrames = size(tomogMap,3);
+    logfn(sprintf('  Loaded: %d frames, size %dx%d', nFrames, size(tomogMap,1), size(tomogMap,2)));
+
+    retPhase     = zeros(round(2*r)-4, round(2*r)-4, nFrames, 'single');
+    retAmplitude = zeros(round(2*r)-4, round(2*r)-4, nFrames, 'single');
+    f_dx = [];
+    f_dy = [];
+
+    for iter = 1:nFrames
+        if mod(iter,10)==1 || iter==nFrames
+            logfn(sprintf('  Frame %d/%d: demodulation + phase retrieval', iter, nFrames));
+        end
+        img = (double(squeeze(tomogMap(:,:,iter))));
+        Fimg = fftshift(fft2(img))/(ii^2);
+        [f_x,f_y] = find(Fimg==max(max(Fimg(:, round(ii*0.01):round(ii*0.49)))));
+        f_dx = [f_dx; f_x];
+        f_dy = [f_dy; f_y];
+        Fimg = Fimg.*c3mask;
+        Fimg = circshift(Fimg,-[round(mi) round(mj)]);
+        Fimg = Fimg(ii/2-r+1:ii/2+r,ii/2-r+1:ii/2+r);
+        sizeFimg = length(Fimg);
+        Fimg = (ifft2(ifftshift(Fimg))*(sizeFimg^2));
+        Fimg = Fimg./squeeze(Fbg(:,:,iter));
+
+        FFimg = (fftshift(fft2(Fimg)));
+        [tempX,tempY] = find(abs(FFimg)==max(max(abs(FFimg))));
+        tempX = tempX-size(FFimg,1)/2;
+        tempY = tempY-size(FFimg,2)/2;
+        Fimg = ifft2(ifftshift(circshift(FFimg,-[tempX-1 tempY-1])));
+
+        Fimg = Fimg(3:end-2,3:end-2);
+        retAmplitude(:,:,iter) = abs(Fimg);
+        p = (PhiShift(unwrap2(double(angle(Fimg)))));
+        [p,coeffVal,~] = phaseCompensation(p,1);
+        pp = (p);
+        tempThresh = p-imtophat(pp,strel('disk',150));
+        tempThresh = mean(tempThresh(:))+1.0;
+        p2Mask = (pp>tempThresh(1));
+        p2Mask = bwareaopen(p2Mask,100);
+        p2Mask = ~imdilate(p2Mask,strel('disk',5));
+        [p,coefficients] = phaseCompensation(p,2,p2Mask);
+        pNegative = (p<0);
+        p = p-sum(sum(p(pNegative)))./sum(sum(pNegative));
+        retPhase(:,:,iter) = p;
+    end
+    logfn(sprintf('  All %d frames processed.', nFrames));
+
+    [~, baseName, ~] = fileparts(sName);
+    fileName = strcat('Field_', baseName);
+    matOut = fullfile(outDir, strcat(fileName, '.mat'));
+    pngOut  = fullfile(outDir, strcat(fileName, '.png'));
+    logfn(sprintf('  Saving: %s', matOut));
+    save(matOut, 'retAmplitude','retPhase','xSize','f_dx','f_dy','NA','lambda','res','ZP');
+    logfn('  MAT file saved. Saving phase overview image...');
+    saveFieldPNG(retPhase, nFrames, pngOut);
+    logfn(sprintf('  Saved PNG: %s', pngOut));
+end
+
+%% Field inspection plot
+logfn('Generating field inspection plot...');
+fieldList = dir(fullfile(outDir, 'Field*.mat'));
+logfn(sprintf('Found %d Field*.mat file(s) for inspection.', length(fieldList)));
+inspectionPng = fullfile(outDir, 'Field_inspection.png');
+saveInspectionPNG(outDir, fieldList, inspectionPng);
+logfn(sprintf('Inspection plot saved: %s', inspectionPng));
+
+logfn('=== field_Retrieval finished ===');
+fclose(fid);
