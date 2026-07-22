@@ -1,36 +1,33 @@
-function [goodp2,coefficients,compensationMap]=phaseCompensation(varargin)
-p2=varargin{1};
-n=varargin{2};
+function [goodp2, coefficients, compensationMap] = phaseCompensation(varargin)
+p2 = varargin{1};
+n  = varargin{2};
 
-if length(varargin)==3
-    mask=varargin{3};
+if length(varargin) == 3
+    mask = varargin{3};
 else
-    mask=ones(size(p2));
+    mask = ones(size(p2));
 end
 
-[imY, imX]=size(p2);
-[XX, YY]=meshgrid(1:imX,1:imY);
+[imY, imX] = size(p2);
+[XX, YY]   = meshgrid(1:imX, 1:imY);
 
-p2mask=p2.*mask;
-%                 p2mask=omit_outliers(p2mask);
-p2mask=p2mask(:);
+% Build polynomial basis columns in one vectorized step (no loop)
+% Powers 1..n for X, then 1..n for Y, then constant — matches original layout
+pwrs = (1:n);
+XXv  = XX(:);  YYv = YY(:);
+Xbasis = XXv .^ pwrs;   % (imX*imY) x n
+Ybasis = YYv .^ pwrs;   % (imX*imY) x n
+AA_full = [Xbasis, Ybasis, ones(imX*imY, 1)];  % (imX*imY) x (2n+1)
 
-X=zeros(sum(p2mask~=0),n);Y=X;
-for ii=1:n
-    XXX=XX.^ii;XXX=XXX(:);XXX(p2mask==0)=[];X(:,ii)=XXX;
-    YYY=YY.^ii;YYY=YYY(:);YYY(p2mask==0)=[];Y(:,ii)=YYY;
-end
-p2mask(p2mask==0)=[];
-E=ones(sum(p2mask~=0),1);AA=[X,Y,E];
-coefficients=(AA'*AA)\(AA'*p2mask);
+% Apply mask: keep only unmasked pixels for the least-squares fit
+p2vec = p2(:) .* mask(:);
+keep  = p2vec ~= 0;
+AA_masked  = AA_full(keep, :);
+p2_masked  = p2vec(keep);
 
-compensationMap=coefficients(end).*ones(imY,imX);
-%             goodp2=p2-coefficients(end).*ones(imY,imX);
-for ii=1:n
-    compensationMap=compensationMap+coefficients(ii).*XX.^ii;
-    compensationMap=compensationMap+coefficients(n+ii).*YY.^ii;
-end
-%             subplot(2,3,1),imagesc(p2),axis image
-%             subplot(2,3,2),imagesc(p2-compensationMap),axis image
-%             subplot(2,3,3),imagesc(p2.*mask),axis image
-goodp2=p2-compensationMap;
+coefficients = (AA_masked' * AA_masked) \ (AA_masked' * p2_masked);
+
+% Reconstruct compensation map over the full image (vectorized)
+compensationMap = reshape(AA_full * coefficients, imY, imX);
+
+goodp2 = p2 - compensationMap;

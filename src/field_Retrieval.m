@@ -13,6 +13,14 @@ logfn = @(msg) fprintf(fid, '[%s] %s\n', datestr(now,'yyyy-mm-dd HH:MM:SS'), msg
 logfn('=== field_Retrieval started ===');
 logfn(sprintf('spath: %s', spath));
 
+%% Start parallel pool (workers = SLURM CPUs minus 1 for main thread)
+nWorkers = max(1, str2double(getenv('SLURM_CPUS_PER_TASK')) - 1);
+if isnan(nWorkers) || nWorkers < 1, nWorkers = 4; end
+if isempty(gcp('nocreate'))
+    parpool('local', nWorkers);
+end
+logfn(sprintf('Parallel pool: %d workers', nWorkers));
+
 %% Background loading
 logfn('Scanning for background files...');
 bglist = dir(fullfile(spath, 'bg*_Tomog.mat'));
@@ -30,14 +38,19 @@ logfn(sprintf('Image size: %d px | ZP=%d | r=%d | NA=%.3f | lambda=%.4f um | res
 
 %% Carrier frequency detection from background frames
 logfn(sprintf('Detecting carrier frequency from %d background frames...', size(tomogMap,3)));
-for bgNum = 1:size(tomogMap,3)
-    img = double(squeeze(tomogMap(:,:,bgNum)));
-    [xSize ySize] = size(img);
-    Fimg = fftshift(fft2(img))/(xSize*ySize);
-    [f_x,f_y] = find(Fimg==max(max(Fimg(:, round(ii*0.01):round(ii*0.49)))));
-    f_dx = [f_dx; f_x];
-    f_dy = [f_dy; f_y];
+nBg = size(tomogMap,3);
+f_dx_bg = zeros(nBg,1);
+f_dy_bg = zeros(nBg,1);
+bgStack = double(tomogMap);  % load once; avoids repeated squeeze+cast inside loop
+parfor bgNum = 1:nBg
+    bgImg = bgStack(:,:,bgNum);
+    Ftmp = fftshift(fft2(bgImg))/(ii^2);
+    [fx,fy] = find(Ftmp==max(max(Ftmp(:, round(ii*0.01):round(ii*0.49)))));
+    f_dx_bg(bgNum) = fx(1);
+    f_dy_bg(bgNum) = fy(1);
 end
+f_dx = f_dx_bg;
+f_dy = f_dy_bg;
 mi = mean(f_dx);
 mj = mean(f_dy);
 mi = round(mi-ii/2-1); mj = round(mj-ii/2-1);
@@ -48,17 +61,19 @@ logfn('Building demodulation mask (mk_ellipse)...');
 c1mask = ~(mk_ellipse(r-20,yr-20,ZP,ZP));
 c3mask = circshift(c1mask,[mi mj]);
 logfn(sprintf('Demodulating %d background frames...', size(tomogMap,3)));
-Fbg = zeros(round(2*r),round(2*r),size(tomogMap,3),'single');
-for bgNum = 1:size(tomogMap,3)
-    img = double(squeeze(tomogMap(:,:,bgNum)));
-    [xSize ySize] = size(img);
-    Fimg = fftshift(fft2(img))/(xSize*ySize);
-    Fimg = Fimg.*c3mask;
-    Fimg = circshift(Fimg,-[round(mi) round(mj)]);
-    Fimg = Fimg(ii/2-r+1:ii/2+r,ii/2-r+1:ii/2+r);
-    sizeFimg = length(Fimg);
-    Fimg = ifft2(ifftshift(Fimg))*(sizeFimg^2);
-    Fbg(:,:,bgNum) = Fimg;
+nBg    = size(tomogMap,3);
+Fbg    = zeros(round(2*r),round(2*r),nBg,'single');
+bgStack = double(tomogMap);  % cast once
+mi_r = round(mi); mj_r = round(mj);
+rowRange = ii/2-r+1:ii/2+r;
+parfor bgNum = 1:nBg
+    bgImg = bgStack(:,:,bgNum);
+    Ftmp = fftshift(fft2(bgImg))/(ii^2);
+    Ftmp = Ftmp.*c3mask;
+    Ftmp = circshift(Ftmp,-[mi_r mj_r]);
+    Ftmp = Ftmp(rowRange, rowRange);
+    sz   = length(Ftmp);
+    Fbg(:,:,bgNum) = single(ifft2(ifftshift(Ftmp))*(sz^2));
 end
 logfn('Background field stack ready.');
 
@@ -75,48 +90,66 @@ for sampleNum = 1:length(sampleList)
     nFrames = size(tomogMap,3);
     logfn(sprintf('  Loaded: %d frames, size %dx%d', nFrames, size(tomogMap,1), size(tomogMap,2)));
 
-    retPhase     = zeros(round(2*r)-4, round(2*r)-4, nFrames, 'single');
-    retAmplitude = zeros(round(2*r)-4, round(2*r)-4, nFrames, 'single');
-    f_dx = [];
-    f_dy = [];
+    pSize = round(2*r)-4;
+    retPhase     = zeros(pSize, pSize, nFrames, 'single');
+    retAmplitude = zeros(pSize, pSize, nFrames, 'single');
+    f_dx_s = zeros(nFrames,1);
+    f_dy_s = zeros(nFrames,1);
 
-    for iter = 1:nFrames
-        if mod(iter,10)==1 || iter==nFrames
-            logfn(sprintf('  Frame %d/%d: demodulation + phase retrieval', iter, nFrames));
-        end
-        img = (double(squeeze(tomogMap(:,:,iter))));
-        Fimg = fftshift(fft2(img))/(ii^2);
-        [f_x,f_y] = find(Fimg==max(max(Fimg(:, round(ii*0.01):round(ii*0.49)))));
-        f_dx = [f_dx; f_x];
-        f_dy = [f_dy; f_y];
-        Fimg = Fimg.*c3mask;
-        Fimg = circshift(Fimg,-[round(mi) round(mj)]);
-        Fimg = Fimg(ii/2-r+1:ii/2+r,ii/2-r+1:ii/2+r);
-        sizeFimg = length(Fimg);
-        Fimg = (ifft2(ifftshift(Fimg))*(sizeFimg^2));
-        Fimg = Fimg./squeeze(Fbg(:,:,iter));
+    % Pre-cast the whole stack once to avoid repeated double() inside parfor
+    sampleStack = double(tomogMap);
 
-        FFimg = (fftshift(fft2(Fimg)));
-        [tempX,tempY] = find(abs(FFimg)==max(max(abs(FFimg))));
-        tempX = tempX-size(FFimg,1)/2;
-        tempY = tempY-size(FFimg,2)/2;
-        Fimg = ifft2(ifftshift(circshift(FFimg,-[tempX-1 tempY-1])));
+    mi_r = round(mi); mj_r = round(mj);
+    rowRange = ii/2-r+1:ii/2+r;
+    ii_sq  = ii^2;
+    colLo  = round(ii*0.01);
+    colHi  = round(ii*0.49);
+    diskSE = strel('disk', 150);  % created once; safe to broadcast (value object)
+    dilSE  = strel('disk', 5);
 
-        Fimg = Fimg(3:end-2,3:end-2);
-        retAmplitude(:,:,iter) = abs(Fimg);
-        p = (PhiShift(unwrap2(double(angle(Fimg)))));
-        [p,coeffVal,~] = phaseCompensation(p,1);
-        pp = (p);
-        tempThresh = p-imtophat(pp,strel('disk',150));
-        tempThresh = mean(tempThresh(:))+1.0;
-        p2Mask = (pp>tempThresh(1));
-        p2Mask = bwareaopen(p2Mask,100);
-        p2Mask = ~imdilate(p2Mask,strel('disk',5));
-        [p,coefficients] = phaseCompensation(p,2,p2Mask);
-        pNegative = (p<0);
-        p = p-sum(sum(p(pNegative)))./sum(sum(pNegative));
-        retPhase(:,:,iter) = p;
+    logfn(sprintf('  Launching parfor over %d frames (%d workers)...', nFrames, nWorkers));
+    parfor iter = 1:nFrames
+        frImg = sampleStack(:,:,iter);
+        Fimg  = fftshift(fft2(frImg)) / ii_sq;
+
+        % carrier frequency detection
+        [f_x,f_y] = find(Fimg == max(max(Fimg(:, colLo:colHi))));
+        f_dx_s(iter) = f_x(1);
+        f_dy_s(iter) = f_y(1);
+
+        % demodulation
+        Fimg = Fimg .* c3mask;
+        Fimg = circshift(Fimg, -[mi_r mj_r]);
+        Fimg = Fimg(rowRange, rowRange);
+        sz   = length(Fimg);
+        Fimg = ifft2(ifftshift(Fimg)) * (sz^2);
+        Fimg = Fimg ./ Fbg(:,:,iter);
+
+        % residual tilt correction via peak shift
+        FFimg = fftshift(fft2(Fimg));
+        [tX,tY] = find(abs(FFimg) == max(max(abs(FFimg))));
+        tX = tX(1) - size(FFimg,1)/2;
+        tY = tY(1) - size(FFimg,2)/2;
+        Fimg = ifft2(ifftshift(circshift(FFimg, -[tX-1 tY-1])));
+
+        Fimg = Fimg(3:end-2, 3:end-2);
+        retAmplitude(:,:,iter) = single(abs(Fimg));
+
+        % phase pipeline
+        p = PhiShift(unwrap2(double(angle(Fimg))));
+        p = phaseCompensation(p, 1);
+        pp = p;
+        tempThresh = p - imtophat(pp, diskSE);
+        tempThresh = mean(tempThresh(:)) + 1.0;
+        p2Mask = bwareaopen(pp > tempThresh(1), 100);
+        p2Mask = ~imdilate(p2Mask, dilSE);
+        p = phaseCompensation(p, 2, p2Mask);
+        pNeg = p < 0;
+        p = p - sum(p(pNeg)) / sum(pNeg(:));
+        retPhase(:,:,iter) = single(p);
     end
+    f_dx = f_dx_s;
+    f_dy = f_dy_s;
     logfn(sprintf('  All %d frames processed.', nFrames));
 
     [~, baseName, ~] = fileparts(sName);
