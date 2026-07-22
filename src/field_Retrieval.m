@@ -152,6 +152,7 @@ for sampleNum = 1:length(sampleList)
     f_dy = f_dy_s;
     logfn(sprintf('  All %d frames processed.', nFrames));
 
+    xSize = ii;
     [~, baseName, ~] = fileparts(sName);
     fileName = strcat('Field_', baseName);
     matOut = fullfile(outDir, strcat(fileName, '.mat'));
