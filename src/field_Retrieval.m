@@ -156,93 +156,20 @@ for sampleNum = 1:length(sampleList)
     fileName = strcat('Field_', baseName);
     matOut = fullfile(outDir, strcat(fileName, '.mat'));
     pngOut  = fullfile(outDir, strcat(fileName, '.png'));
-    xSize = ii;  % original hologram pixel dimension; used downstream in tomogram_Reconstruction
     logfn(sprintf('  Saving: %s', matOut));
     save(matOut, 'retAmplitude','retPhase','xSize','f_dx','f_dy','NA','lambda','res','ZP');
     logfn('  MAT file saved. Saving phase overview image...');
-    try
-        cmap    = jet(256);
-        GAP     = 20;       % white gap between panels (px)
-        clim_ph = [-3 3];
-        toRGB   = @(im) ind2rgb(im2uint8(mat2gray(im, clim_ph)), cmap);
-
-        % 6 square phase panels — resize all to same size
-        P = 300;   % each panel size in pixels
-        panels = cell(1,6);
-        for kk = 1:6
-            panels{kk} = imresize(toRGB(squeeze(retPhase(:,:,round(nFrames/6*kk)))), [P P]);
-        end
-
-        CBAR  = 20;
-        % total width = 3 panels + 2 gaps + gap + colorbar
-        rowW  = 3*P + 2*GAP;
-        Wtotal = rowW + GAP + CBAR;
-
-        hgap  = ones(P, GAP, 3);
-        row1  = [panels{1}, hgap, panels{2}, hgap, panels{3}];
-        row2  = [panels{4}, hgap, panels{5}, hgap, panels{6}];
-        % pad rows to Wtotal
-        row1  = padarray(row1, [0, Wtotal-rowW], 1, 'post');
-        row2  = padarray(row2, [0, Wtotal-rowW], 1, 'post');
-
-        % kymograph strip: fixed height, stretched to full rowW width
-        strip     = toRGB(squeeze(retPhase(:,end/2,:)));
-        kymoH     = 200;
-        strip_rs  = imresize(strip, [kymoH, rowW]);
-        cbgap_st  = ones(kymoH, GAP, 3);
-        cbar_st   = ind2rgb(im2uint8(repmat(linspace(1,0,kymoH)', 1, CBAR)), cmap);
-        strip_row = [strip_rs, cbgap_st, cbar_st];  % width == Wtotal
-
-        vgap = ones(GAP, Wtotal, 3);
-        grid = [row1; vgap; row2; vgap; strip_row];
-
-        % outer white border
-        BORDER = 40;
-        bH = size(grid,1); bW = size(grid,2);
-        mosaic = ones(bH+2*BORDER, bW+2*BORDER, 3);
-        mosaic(BORDER+1:BORDER+bH, BORDER+1:BORDER+bW, :) = grid;
-        imwrite(mosaic, pngOut);
-        logfn(sprintf('  Saved PNG: %s', pngOut));
-    catch ME
-        logfn(sprintf('  WARNING: PNG save failed (%s) — continuing.', ME.message));
-    end
+    saveFieldPNG(retPhase, nFrames, pngOut);
+    logfn(sprintf('  Saved PNG: %s', pngOut));
 end
 
-%% Field inspection plot (headless-safe: renders to pixel buffer, no Qt)
+%% Field inspection plot
 logfn('Generating field inspection plot...');
 fieldList = dir(fullfile(outDir, 'Field*.mat'));
 logfn(sprintf('Found %d Field*.mat file(s) for inspection.', length(fieldList)));
 inspectionPng = fullfile(outDir, 'Field_inspection.png');
-try
-    W = 800; H = 400;
-    canvas = ones(H, W, 3, 'uint8') * 255;  % white background
-    allTemp = {}; allDiff = {};
-    for sampleNum = 1:length(fieldList)
-        load(fullfile(outDir, fieldList(sampleNum).name), 'retPhase');
-        t = mean(squeeze(mean(abs(retPhase), 1)));
-        allTemp{end+1} = t;
-        allDiff{end+1} = t - circshift(t, 1);
-    end
-    ymin = -3; ymax = 3;
-    for sampleNum = 1:length(allTemp)
-        t = allTemp{sampleNum};
-        d = allDiff{sampleNum};
-        N = length(t);
-        for fr = 1:N
-            px = round((fr-1)/(N-1) * (W-1)) + 1;
-            py_t = round((1 - (t(fr)-ymin)/(ymax-ymin)) * (H-1)) + 1;
-            py_d = round((1 - (d(fr)-ymin)/(ymax-ymin)) * (H-1)) + 1;
-            py_t = max(1, min(H, py_t));
-            py_d = max(1, min(H, py_d));
-            canvas(py_t, px, :) = reshape([255 0 0], 1, 1, 3);  % red: mean phase
-            canvas(py_d, px, :) = reshape([0 180 0], 1, 1, 3);  % green: diff
-        end
-    end
-    imwrite(canvas, inspectionPng);
-    logfn(sprintf('Inspection plot saved: %s', inspectionPng));
-catch ME
-    logfn(sprintf('WARNING: inspection plot failed (%s) — continuing.', ME.message));
-end
+saveInspectionPNG(outDir, fieldList, inspectionPng);
+logfn(sprintf('Inspection plot saved: %s', inspectionPng));
 
 logfn('=== field_Retrieval finished ===');
 fclose(fid);

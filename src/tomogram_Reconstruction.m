@@ -98,64 +98,16 @@ for sampleNum = 1:length(sampleList)
     pngOut  = fullfile(outDir, strcat(fileName, '.png'));
     logfn(sprintf('  Saving: %s', matOut));
     save(matOut, 'Reconimg','res3','res4','lambda','excludeFrame');
-    logfn('  MAT file saved. Saving reconstruction image...');
-    try
-        clim  = [1.337-0.005, n_s];
-        cmap  = jet(256);
-        GAP   = 30;     % gap between panels and border (px)
-        CBAR  = 24;     % colorbar width (px)
-        ROWW  = 900;    % target total width per row (both panels + gap)
-        PH2   = 400;    % row-2 panel height (XY / MIP — larger)
+    logfn('  MAT file saved.');
 
-        toRGB   = @(im) ind2rgb(im2uint8(mat2gray(im, clim)), cmap);
-        % resize panel to fixed height, preserving aspect ratio
-        resizeH = @(im, h) imresize(toRGB(im), [h, round(h*size(im,2)/size(im,1))]);
-        % resize panel to fixed width
-        resizeW = @(im, w) imresize(toRGB(im), [round(w*size(im,1)/size(im,2)), w]);
+    tifOut = fullfile(outDir, strcat(fileName, '.tif'));
+    logfn(sprintf('  Saving TIFF: %s', tifOut));
+    saveTomogramTIFF(Reconimg, tifOut);
+    logfn(sprintf('  TIFF saved (%d slices).', size(Reconimg,3)));
 
-        xz  = real(squeeze(Reconimg(end/2,:,:)))';
-        yz  = real(squeeze(Reconimg(:,end/2,:)))';
-        xy  = real(squeeze(Reconimg(:,:,end/2+1)));
-        mip = max(real(Reconimg), [], 3);
-
-        % Row 1: XZ and YZ — each gets half of ROWW (minus gap)
-        panW1 = floor((ROWW - GAP) / 2);
-        p_xz  = resizeW(xz, panW1);
-        p_yz  = resizeW(yz, panW1);
-        PH1   = max(size(p_xz,1), size(p_yz,1));
-        wpad  = @(im, h) padarray(im, [h-size(im,1), 0], 1, 'post');
-        p_xz  = wpad(p_xz, PH1);  p_yz = wpad(p_yz, PH1);
-        hgap1 = ones(PH1, GAP, 3);
-        row1  = [p_xz, hgap1, p_yz];
-
-        % Row 2: XY and MIP — square panels at PH2 height, centered in ROWW
-        p_xy  = imresize(toRGB(xy),  [PH2 PH2]);
-        p_mip = imresize(toRGB(mip), [PH2 PH2]);
-        hgap2 = ones(PH2, GAP, 3);
-        row2_inner = [p_xy, hgap2, p_mip];
-        % center row2 within ROWW
-        pad2  = floor((ROWW - size(row2_inner,2)) / 2);
-        pad2  = max(pad2, 0);
-        row2  = [ones(PH2, pad2, 3), row2_inner, ones(PH2, ROWW-size(row2_inner,2)-pad2, 3)];
-
-        vgap  = ones(GAP, ROWW, 3);
-        grid  = [row1; vgap; row2];
-
-        % single colorbar on the right spanning full grid height
-        cbH   = size(grid, 1);
-        cbar  = ind2rgb(im2uint8(repmat(linspace(1,0,cbH)', 1, CBAR)), cmap);
-        cbgap = ones(cbH, GAP, 3);
-        inner = [grid, cbgap, cbar];
-
-        BORDER = 40;
-        bH = size(inner,1); bW = size(inner,2);
-        mosaic = ones(bH+2*BORDER, bW+2*BORDER, 3);
-        mosaic(BORDER+1:BORDER+bH, BORDER+1:BORDER+bW, :) = inner;
-        imwrite(mosaic, pngOut);
-        logfn(sprintf('  Saved PNG: %s', pngOut));
-    catch ME
-        logfn(sprintf('  WARNING: PNG save failed (%s) — continuing.', ME.message));
-    end
+    logfn(sprintf('  Saving PNG: %s', pngOut));
+    saveTomogramPNG(Reconimg, n_s, pngOut);
+    logfn('  PNG saved.');
 end
 
 logfn('=== tomogram_Reconstruction finished ===');
