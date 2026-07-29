@@ -135,21 +135,32 @@ for sampleNum = 1:length(sampleList)
         Fimg = Fimg(3:end-2, 3:end-2);
         retAmplitude(:,:,iter) = single(abs(Fimg));
 
-        % phase pipeline
-        p = PhiShift(unwrap2(double(angle(Fimg))));
-        p = phaseCompensation(p, 1);
-        pp = p;
-        tempThresh = p - imtophat(pp, diskSE);
-        tempThresh = mean(tempThresh(:)) + 1.0;
-        p2Mask = bwareaopen(pp > tempThresh(1), 100);
-        p2Mask = ~imdilate(p2Mask, dilSE);
-        p = phaseCompensation(p, 2, p2Mask);
-        pNeg = p < 0;
-        p = p - sum(p(pNeg)) / sum(pNeg(:));
-        retPhase(:,:,iter) = single(p);
+        % phase pipeline — wrapped in try/catch so a single bad frame (e.g.
+        % unwrap2 failing on a near-empty or saturated patch) does not abort
+        % the entire parfor. NaN frames are excluded downstream by excludeFrame.
+        try
+            p = PhiShift(unwrap2(double(angle(Fimg))));
+            p = phaseCompensation(p, 1);
+            pp = p;
+            tempThresh = p - imtophat(pp, diskSE);
+            tempThresh = mean(tempThresh(:)) + 1.0;
+            p2Mask = bwareaopen(pp > tempThresh(1), 100);
+            p2Mask = ~imdilate(p2Mask, dilSE);
+            p = phaseCompensation(p, 2, p2Mask);
+            pNeg = p < 0;
+            p = p - sum(p(pNeg)) / sum(pNeg(:));
+            retPhase(:,:,iter) = single(p);
+        catch ME
+            retPhase(:,:,iter) = NaN(size(retPhase,1), size(retPhase,2), 'single');
+        end
     end
     f_dx = f_dx_s;
     f_dy = f_dy_s;
+    badFrames = find(squeeze(any(any(isnan(retPhase), 1), 2)));
+    if ~isempty(badFrames)
+        logfn(sprintf('  WARNING: %d frame(s) failed phase unwrapping and were set to NaN: %s', ...
+            numel(badFrames), num2str(badFrames(:)')));
+    end
     logfn(sprintf('  All %d frames processed.', nFrames));
 
     xSize = ii;
