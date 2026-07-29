@@ -148,11 +148,11 @@ submit_chunk() {
     IFS=',' read -ra flist <<< "${files_csv}"
     local dataset_dir
     dataset_dir=$(dirname "${flist[0]}")
-    local bg_src="${dataset_dir}/bg01_Tomog.mat"
+    local bg_src="${dataset_dir}/bg001_Tomog.mat"
     if [[ -f "${bg_src}" ]]; then
         rsync -a "${bg_src}" "${chunk_data}/" \
             || { log "ERROR: rsync failed for background ${bg_src}"; return 1; }
-        log "  Copied: bg01_Tomog.mat"
+        log "  Copied: bg001_Tomog.mat"
     else
         log "ERROR: background not found: ${bg_src}"
         return 1
