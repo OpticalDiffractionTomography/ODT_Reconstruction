@@ -10,6 +10,7 @@
 #   TOMO_SLURM_CPUS, TOMO_SLURM_MEM, TOMO_SLURM_TIME
 
 set -euo pipefail
+trap 'echo "[$(date +%Y-%m-%d\ %H:%M:%S)] FATAL: script exited unexpectedly at line ${LINENO} (exit code $?)" >> "${ORCH_LOG:-/tmp/tomo_orch_crash.log}"' EXIT
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 RUN_SCRATCH="${TOMO_SCRATCH_ROOT}/${TOMO_RUN_ID}"
@@ -191,7 +192,9 @@ submit_chunk() {
 }
 
 # ── Main loop ─────────────────────────────────────────────────────────────────
-declare -A submitted
+log "Entering main loop (bash ${BASH_VERSION})"
+declare -A submitted || { log "ERROR: declare -A failed (bash too old?)"; exit 1; }
+log "State initialized"
 
 while true; do
     collect_finished
