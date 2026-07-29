@@ -33,22 +33,27 @@ log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
 
 send_email() {
     local subject="$1" body="$2"
-    # Try sendmail first (available on most HPC login nodes), then mail, then
-    # fall back to a notification file the user can read with --status.
     local full_subject="[tomo_process] ${subject}"
     local sent=false
+    # Redirect both stdout and stderr to suppress dead.letter noise
     if command -v sendmail &>/dev/null; then
-        printf "Subject: %s\nTo: %s\n\n%b\n" \
-            "${full_subject}" "${TOMO_EMAIL}" "${body}" \
-            | sendmail "${TOMO_EMAIL}" 2>/dev/null && sent=true
+        if printf "Subject: %s\nTo: %s\n\n%b\n" \
+                "${full_subject}" "${TOMO_EMAIL}" "${body}" \
+                | sendmail "${TOMO_EMAIL}" &>/dev/null; then
+            sent=true
+        fi
     fi
-    if ! "${sent}" && command -v mail &>/dev/null; then
-        echo -e "${body}" | mail -s "${full_subject}" "${TOMO_EMAIL}" 2>/dev/null && sent=true
+    if [[ "${sent}" == false ]] && command -v mail &>/dev/null; then
+        if echo -e "${body}" | mail -s "${full_subject}" "${TOMO_EMAIL}" &>/dev/null; then
+            sent=true
+        fi
     fi
-    # Always write a notification file as fallback
+    # Always write a notification file — readable via --status log
     local note_file="${LOG_DIR}/notification_$(date '+%Y%m%d_%H%M%S').txt"
     printf "Subject: %s\n\n%b\n" "${full_subject}" "${body}" > "${note_file}"
-    "${sent}" || log "NOTE: email not sent (no mail relay); notification saved to ${note_file}"
+    if [[ "${sent}" == false ]]; then
+        log "NOTE: email not sent (no mail relay); notification saved to ${note_file}"
+    fi
 }
 
 log "=== Orchestrator start (pid $$) ==="
