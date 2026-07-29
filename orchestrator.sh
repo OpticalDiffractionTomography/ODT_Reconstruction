@@ -19,7 +19,6 @@ JOBS_DIR="${RUN_SCRATCH}/jobs"
 ORCH_LOG="${LOG_DIR}/orchestrator.log"
 
 SRC_MOUNT="${TOMO_DATA_MOUNT}/${TOMO_INPUT_PATH}"
-DST_RESULTS="${SRC_MOUNT}/_results"
 
 CHUNKS_FILE="${STATE_DIR}/chunks.txt"
 ACTIVE_FILE="${STATE_DIR}/active_jobs.txt"
@@ -59,10 +58,13 @@ send_email() {
 log "=== Orchestrator start (pid $$) ==="
 log "Run ID  : ${TOMO_RUN_ID}"
 log "Input   : ${SRC_MOUNT}"
-log "Results : ${DST_RESULTS}"
+log "Results : <src_dir>/field_retrieval_zpe_results/ (per source directory)"
 log "Scratch : ${RUN_SCRATCH}"
 
 # ── Discover and chunk files ──────────────────────────────────────────────────
+# Group by source directory first — MATLAB's spath must point to a single flat
+# directory containing sample + background files, so we never mix directories
+# within one chunk. Each chunk line: chunk_id <TAB> src_dir <TAB> file1,file2,...
 find "${SRC_MOUNT}" -name "sample*_Tomog.mat" | sort > "${STATE_DIR}/pending_files.txt"
 TOTAL=$(wc -l < "${STATE_DIR}/pending_files.txt")
 log "Found ${TOTAL} sample files"
@@ -74,23 +76,34 @@ if [[ "${TOTAL}" -eq 0 ]]; then
 fi
 
 chunk_idx=0
+current_dir=""
 chunk_files=()
+
+flush_chunk() {
+    [[ ${#chunk_files[@]} -eq 0 ]] && return 0
+    local cid
+    cid=$(printf "chunk%04d" ${chunk_idx})
+    echo "${cid}"$'\t'"${current_dir}"$'\t'"$(IFS=','; echo "${chunk_files[*]}")" >> "${CHUNKS_FILE}"
+    chunk_idx=$(( chunk_idx + 1 ))
+    chunk_files=()
+}
+
 while IFS= read -r fpath; do
+    local_dir=$(dirname "${fpath}")
+    # New source directory — flush current chunk and start fresh
+    if [[ "${local_dir}" != "${current_dir}" ]]; then
+        flush_chunk
+        current_dir="${local_dir}"
+    fi
     chunk_files+=("${fpath}")
     if [[ ${#chunk_files[@]} -ge ${TOMO_CHUNK_SIZE} ]]; then
-        cid=$(printf "chunk%04d" ${chunk_idx})
-        echo "${cid}"$'\t'"$(IFS=','; echo "${chunk_files[*]}")" >> "${CHUNKS_FILE}"
-        chunk_idx=$(( chunk_idx + 1 ))
-        chunk_files=()
+        flush_chunk
     fi
 done < "${STATE_DIR}/pending_files.txt"
-if [[ ${#chunk_files[@]} -gt 0 ]]; then
-    cid=$(printf "chunk%04d" ${chunk_idx})
-    echo "${cid}"$'\t'"$(IFS=','; echo "${chunk_files[*]}")" >> "${CHUNKS_FILE}"
-fi
+flush_chunk  # flush any remaining files
 
 NCHUNKS=$(wc -l < "${CHUNKS_FILE}")
-log "Split into ${NCHUNKS} chunks of up to ${TOMO_CHUNK_SIZE} files"
+log "Split into ${NCHUNKS} chunks of up to ${TOMO_CHUNK_SIZE} files (grouped by directory)"
 
 touch "${ACTIVE_FILE}" "${DONE_FILE}" "${FAIL_FILE}"
 
@@ -115,16 +128,16 @@ collect_finished() {
         local fail_marker="${RUN_SCRATCH}/${cid}/FAIL"
 
         if [[ -f "${done_marker}" ]]; then
-            log "Chunk ${cid} done — copying results back to ${DST_RESULTS}/"
-            # Preserve the subdirectory structure: data/<rel_path>/field_retrieval/ → _results/<rel_path>/field_retrieval/
-            while IFS= read -r -d '' fr_dir; do
-                local rel_path="${fr_dir#${RUN_SCRATCH}/${cid}/data/}"
-                local dst_dir="${DST_RESULTS}/${rel_path}"
-                mkdir -p "${dst_dir}"
-                rsync -a "${fr_dir}/" "${dst_dir}/" \
-                    && log "  Results copied: ${rel_path}" \
-                    || log "WARNING: rsync failed for ${rel_path}"
-            done < <(find "${RUN_SCRATCH}/${cid}/data" -type d -name "field_retrieval" -print0)
+            # Resolve source dir for this chunk from chunks.txt to build result path
+            local src_dir
+            src_dir=$(awk -F'\t' -v c="${cid}" '$1==c {print $2}' "${CHUNKS_FILE}")
+            local rel_src="${src_dir#${TOMO_DATA_MOUNT}/}"
+            local dst_dir="${TOMO_DATA_MOUNT}/${rel_src}/field_retrieval_zpe_results"
+            log "Chunk ${cid} done — copying results to ${dst_dir}/"
+            mkdir -p "${dst_dir}"
+            rsync -a "${RUN_SCRATCH}/${cid}/data/field_retrieval/" "${dst_dir}/" \
+                && log "  Results copied for ${cid}" \
+                || log "WARNING: rsync to /mnt failed for ${cid}"
             rm -rf "${RUN_SCRATCH:?}/${cid}"
             echo "${cid}" >> "${DONE_FILE}"
 
@@ -143,43 +156,32 @@ collect_finished() {
 }
 
 submit_chunk() {
-    local cid="$1" files_csv="$2"
+    local cid="$1" src_dir="$2" files_csv="$3"
     local chunk_scratch="${RUN_SCRATCH}/${cid}"
+    # chunk_data is a flat directory — MATLAB's spath points here directly
     local chunk_data="${chunk_scratch}/data"
     mkdir -p "${chunk_data}/field_retrieval"
 
-    # Copy sample files, preserving subdirectory structure under chunk_data
+    # Copy background file (one per source directory, always present alongside samples)
+    local bg_src="${src_dir}/bg001_Tomog.mat"
+    if [[ -f "${bg_src}" ]]; then
+        rsync -a "${bg_src}" "${chunk_data}/" \
+            || { log "ERROR: rsync failed for background ${bg_src}"; return 1; }
+        log "  Copied: bg001_Tomog.mat"
+    else
+        log "ERROR: background not found: ${bg_src}"
+        return 1
+    fi
+
+    # Copy sample files for this chunk (all from the same source directory)
     IFS=',' read -ra flist <<< "${files_csv}"
     for fpath in "${flist[@]}"; do
-        local rel_dir
-        rel_dir=$(dirname "${fpath#${TOMO_DATA_MOUNT}/}")
-        mkdir -p "${chunk_data}/${rel_dir}"
-        rsync -a "${fpath}" "${chunk_data}/${rel_dir}/" \
+        rsync -a "${fpath}" "${chunk_data}/" \
             || { log "ERROR: rsync failed for ${fpath}"; return 1; }
     done
     log "  Copied ${#flist[@]} sample files for ${cid}"
 
-    # Copy bg001_Tomog.mat from every unique subdirectory represented in this chunk
-    declare -A seen_dirs
-    for fpath in "${flist[@]}"; do
-        local src_dir
-        src_dir=$(dirname "${fpath}")
-        [[ -n "${seen_dirs[${src_dir}]+x}" ]] && continue
-        seen_dirs["${src_dir}"]=1
-        local bg_src="${src_dir}/bg001_Tomog.mat"
-        local rel_dir
-        rel_dir=$(dirname "${fpath#${TOMO_DATA_MOUNT}/}")
-        if [[ -f "${bg_src}" ]]; then
-            rsync -a "${bg_src}" "${chunk_data}/${rel_dir}/" \
-                || { log "ERROR: rsync failed for background ${bg_src}"; return 1; }
-            log "  Copied: ${rel_dir}/bg001_Tomog.mat"
-        else
-            log "ERROR: background not found: ${bg_src}"
-            return 1
-        fi
-    done
-
-    # Generate job script from template
+    # Generate job script from template; DATA_DIR = chunk_data (flat, no nesting)
     local job_script="${JOBS_DIR}/${cid}.sh"
     local job_name="tomo_${TOMO_RUN_ID}_${cid}"
     sed \
@@ -227,14 +229,14 @@ while true; do
     slots=$(( TOMO_MAX_JOBS - active ))
 
     if [[ "${slots}" -gt 0 ]]; then
-        while IFS=$'\t' read -r cid files_csv; do
+        while IFS=$'\t' read -r cid src_dir files_csv; do
             [[ "${slots}" -le 0 ]] && break
             [[ -n "${submitted[${cid}]+x}" ]] && continue
             grep -qx "${cid}" "${DONE_FILE}" 2>/dev/null && { submitted["${cid}"]=1; continue; }
             grep -qx "${cid}" "${FAIL_FILE}" 2>/dev/null && { submitted["${cid}"]=1; continue; }
 
-            log "Preparing ${cid} ..."
-            if submit_chunk "${cid}" "${files_csv}"; then
+            log "Preparing ${cid} (source: ${src_dir}) ..."
+            if submit_chunk "${cid}" "${src_dir}" "${files_csv}"; then
                 submitted["${cid}"]=1
                 slots=$(( slots - 1 ))
             else
@@ -253,8 +255,8 @@ log "=== All done: ${local_done} succeeded, ${local_fail} failed ==="
 
 if [[ "${local_fail}" -gt 0 ]]; then
     send_email "Completed with errors — ${TOMO_RUN_ID}" \
-        "Processing complete.\nSucceeded: ${local_done}\nFailed: ${local_fail}\n\nFailed chunks:\n$(cat "${FAIL_FILE}")\n\nResults: ${DST_RESULTS}\nLogs: ${LOG_DIR}"
+        "Processing complete.\nSucceeded: ${local_done}\nFailed: ${local_fail}\n\nFailed chunks:\n$(cat "${FAIL_FILE}")\n\nResults: <src_dir>/field_retrieval_zpe_results/ (per source directory)\nLogs: ${LOG_DIR}"
 else
     send_email "Completed successfully — ${TOMO_RUN_ID}" \
-        "All ${local_done} chunks processed successfully.\n\nResults: ${DST_RESULTS}\nLogs: ${LOG_DIR}"
+        "All ${local_done} chunks processed successfully.\n\nResults: <src_dir>/field_retrieval_zpe_results/ (per source directory)\nLogs: ${LOG_DIR}"
 fi
