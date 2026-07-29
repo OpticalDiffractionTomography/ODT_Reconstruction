@@ -6,6 +6,7 @@
 #
 # Usage:
 #   tomo_process --email <email> --path <relative_path_under_guck_division2>
+#   tomo_process --resume <run_id>
 #   tomo_process --status <run_id>
 #   tomo_process --list
 #   tomo_process --cancel <run_id>
@@ -24,6 +25,7 @@ Usage:
                [--max-jobs <N>]  [--mins-per-sample <N>]
 
   tomo_process --status <run_id>   Show status of a running/finished run
+  tomo_process --resume <run_id>   Resume after login node crash/disconnect
   tomo_process --list              List all runs
   tomo_process --cancel <run_id>   Cancel an active run
 
@@ -197,6 +199,25 @@ cmd_start() {
 
     local pid_file="${run_scratch}/state/orchestrator.pid"
 
+    # Save all run parameters so --resume can restart without re-specifying them
+    cat > "${run_scratch}/state/run_env.sh" <<EOF
+TOMO_RUN_ID="${run_id}"
+TOMO_INPUT_PATH="${input_path}"
+TOMO_EMAIL="${email}"
+TOMO_MAX_JOBS="${max_jobs}"
+TOMO_MINS_PER_SAMPLE="${mins_per_sample}"
+TOMO_REPO_DIR="${SCRIPT_DIR}"
+TOMO_SCRATCH_ROOT="${SCRATCH_ROOT}"
+TOMO_DATA_MOUNT="${GUCK_DIVISION_2_MOUNT}"
+TOMO_RESULTS_MOUNT="${ZPE_RESULTS_MOUNT}"
+TOMO_POLL_INTERVAL="${POLL_INTERVAL}"
+TOMO_SLURM_PARTITION="${SLURM_PARTITION}"
+TOMO_SLURM_GRES="${SLURM_GRES}"
+TOMO_SLURM_CPUS="${SLURM_CPUS}"
+TOMO_SLURM_MEM="${SLURM_MEM}"
+TOMO_SLURM_TIME="${SLURM_TIME}"
+EOF
+
     info "Run ID          : ${run_id}"
     info "Scratch         : ${run_scratch}"
     info "Max parallel jobs: ${max_jobs}"
@@ -239,12 +260,66 @@ cmd_start() {
     info "  ${run_scratch}/logs/orchestrator.log"
 }
 
+# ── Sub-command: resume ───────────────────────────────────────────────────────
+cmd_resume() {
+    local run_id="$1"
+    local run_dir="${SCRATCH_ROOT}/${run_id}"
+    [[ -d "${run_dir}" ]] || die "Run not found: ${run_id}"
+
+    local state_dir="${run_dir}/state"
+    [[ -f "${state_dir}/chunks.txt" ]] || die "No chunks.txt found — run may not have started properly"
+
+    # Check it's not already running
+    local pid_file="${state_dir}/orchestrator.pid"
+    if [[ -f "${pid_file}" ]]; then
+        local pid
+        pid=$(cat "${pid_file}")
+        if kill -0 "${pid}" 2>/dev/null; then
+            die "Orchestrator is already running (pid ${pid}). Use --status to check progress."
+        fi
+    fi
+
+    # Read original run parameters from the saved env file
+    local env_file="${state_dir}/run_env.sh"
+    [[ -f "${env_file}" ]] || die "No run_env.sh found in state dir — cannot resume (missing original parameters)"
+    # shellcheck source=/dev/null
+    source "${env_file}"
+
+    info "Resuming run: ${run_id}"
+    info "Orchestrator will re-adopt any active SLURM jobs and continue from saved state"
+
+    nohup env \
+        TOMO_RUN_ID="${TOMO_RUN_ID}" \
+        TOMO_INPUT_PATH="${TOMO_INPUT_PATH}" \
+        TOMO_EMAIL="${TOMO_EMAIL}" \
+        TOMO_MAX_JOBS="${TOMO_MAX_JOBS}" \
+        TOMO_MINS_PER_SAMPLE="${TOMO_MINS_PER_SAMPLE}" \
+        TOMO_REPO_DIR="${TOMO_REPO_DIR}" \
+        TOMO_SCRATCH_ROOT="${TOMO_SCRATCH_ROOT}" \
+        TOMO_DATA_MOUNT="${TOMO_DATA_MOUNT}" \
+        TOMO_RESULTS_MOUNT="${TOMO_RESULTS_MOUNT}" \
+        TOMO_POLL_INTERVAL="${TOMO_POLL_INTERVAL}" \
+        TOMO_SLURM_PARTITION="${TOMO_SLURM_PARTITION}" \
+        TOMO_SLURM_GRES="${TOMO_SLURM_GRES}" \
+        TOMO_SLURM_CPUS="${TOMO_SLURM_CPUS}" \
+        TOMO_SLURM_MEM="${TOMO_SLURM_MEM}" \
+        TOMO_SLURM_TIME="${TOMO_SLURM_TIME}" \
+        bash "${SCRIPT_DIR}/scripts/orchestrator.sh" \
+        >> "${run_dir}/logs/orchestrator.log" 2>&1 &
+
+    local bg_pid=$!
+    echo "${bg_pid}" > "${pid_file}"
+    info "Orchestrator restarted (pid ${bg_pid})"
+    info "  tomo_process --status ${run_id}"
+}
+
 # ── Dispatch ──────────────────────────────────────────────────────────────────
 [[ $# -eq 0 ]] && { usage; exit 1; }
 
 case "$1" in
     --help|-h)   usage ;;
     --list)      cmd_list ;;
+    --resume)    [[ $# -ge 2 ]] || die "--resume requires a run_id"; cmd_resume "$2" ;;
     --status)    [[ $# -ge 2 ]] || die "--status requires a run_id"; cmd_status "$2" ;;
     --cancel)    [[ $# -ge 2 ]] || die "--cancel requires a run_id"; cmd_cancel "$2" ;;
     *)           cmd_start "$@" ;;

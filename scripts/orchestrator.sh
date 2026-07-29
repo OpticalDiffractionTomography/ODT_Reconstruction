@@ -61,70 +61,70 @@ log "Input   : ${SRC_MOUNT}"
 log "Results : ${TOMO_RESULTS_MOUNT}/<rel_path>/field_retrieval_zpe_results/ (per source dir)"
 log "Scratch : ${RUN_SCRATCH}"
 
-# ── Discover and chunk files ──────────────────────────────────────────────────
-# Rules:
-#   1. Never mix files from different source directories in one chunk
-#      (MATLAB's spath must be a single flat dir with bg + sample files).
-#   2. Auto-size chunk capacity from walltime budget:
-#        max_per_job = floor(walltime_minutes / MINS_PER_SAMPLE)
-#      so each job comfortably fits within SLURM_TIME with a safety margin.
-#   3. If a subdirectory has more samples than max_per_job, split it into
-#      multiple sequential jobs — still no directory mixing.
-#
+# ── Discover and chunk files (skipped on resume — chunks.txt already exists) ──
 # chunks.txt format: chunk_id <TAB> src_dir <TAB> file1,file2,...
+# State files on /beegfs survive login node reboots, so a resumed orchestrator
+# simply re-adopts active jobs and continues from where it left off.
 
-find "${SRC_MOUNT}" -name "sample*_Tomog.mat" | sort > "${STATE_DIR}/pending_files.txt"
-TOTAL=$(wc -l < "${STATE_DIR}/pending_files.txt")
-log "Found ${TOTAL} sample files"
+if [[ -f "${CHUNKS_FILE}" ]]; then
+    NCHUNKS=$(wc -l < "${CHUNKS_FILE}")
+    DONE_N=$(wc -l < "${DONE_FILE}")
+    FAIL_N=$(wc -l < "${FAIL_FILE}")
+    log "RESUMING existing run — ${NCHUNKS} chunks total, ${DONE_N} done, ${FAIL_N} failed"
+else
+    log "Fresh run — discovering sample files under ${SRC_MOUNT}"
+    find "${SRC_MOUNT}" -name "sample*_Tomog.mat" | sort > "${STATE_DIR}/pending_files.txt"
+    TOTAL=$(wc -l < "${STATE_DIR}/pending_files.txt")
+    log "Found ${TOTAL} sample files"
 
-if [[ "${TOTAL}" -eq 0 ]]; then
-    log "ERROR: no sample*_Tomog.mat files found under ${SRC_MOUNT}"
-    send_email "FAILED — ${TOMO_RUN_ID}" "No sample files found under ${SRC_MOUNT}"
-    exit 1
-fi
+    if [[ "${TOTAL}" -eq 0 ]]; then
+        log "ERROR: no sample*_Tomog.mat files found under ${SRC_MOUNT}"
+        send_email "FAILED — ${TOMO_RUN_ID}" "No sample files found under ${SRC_MOUNT}"
+        exit 1
+    fi
 
-# Derive max samples per job from walltime (HH:MM:SS) and per-sample estimate
-walltime_h=$(echo "${TOMO_SLURM_TIME}" | cut -d: -f1)
-walltime_m=$(echo "${TOMO_SLURM_TIME}" | cut -d: -f2)
-walltime_mins=$(( 10#${walltime_h} * 60 + 10#${walltime_m} ))
-max_per_job=$(( walltime_mins / TOMO_MINS_PER_SAMPLE ))
-[[ "${max_per_job}" -lt 1 ]] && max_per_job=1
-log "Walltime ${TOMO_SLURM_TIME} / ${TOMO_MINS_PER_SAMPLE} min per sample → max ${max_per_job} samples per job"
+    # Auto-size: max samples per job = floor(walltime_minutes / mins_per_sample)
+    walltime_h=$(echo "${TOMO_SLURM_TIME}" | cut -d: -f1)
+    walltime_m=$(echo "${TOMO_SLURM_TIME}" | cut -d: -f2)
+    walltime_mins=$(( 10#${walltime_h} * 60 + 10#${walltime_m} ))
+    max_per_job=$(( walltime_mins / TOMO_MINS_PER_SAMPLE ))
+    [[ "${max_per_job}" -lt 1 ]] && max_per_job=1
+    log "Walltime ${TOMO_SLURM_TIME} / ${TOMO_MINS_PER_SAMPLE} min per sample → max ${max_per_job} samples per job"
 
-chunk_idx=0
-current_dir=""
-chunk_files=()
-
-flush_chunk() {
-    [[ ${#chunk_files[@]} -eq 0 ]] && return 0
-    local cid
-    cid=$(printf "chunk%04d" ${chunk_idx})
-    echo "${cid}"$'\t'"${current_dir}"$'\t'"$(IFS=','; echo "${chunk_files[*]}")" >> "${CHUNKS_FILE}"
-    log "  ${cid}: ${#chunk_files[@]} files from ${current_dir}"
-    chunk_idx=$(( chunk_idx + 1 ))
+    chunk_idx=0
+    current_dir=""
     chunk_files=()
-}
 
-while IFS= read -r fpath; do
-    local_dir=$(dirname "${fpath}")
-    if [[ "${local_dir}" != "${current_dir}" ]]; then
-        flush_chunk
-        current_dir="${local_dir}"
-    fi
-    chunk_files+=("${fpath}")
-    if [[ ${#chunk_files[@]} -ge ${max_per_job} ]]; then
-        flush_chunk
-    fi
-done < "${STATE_DIR}/pending_files.txt"
-flush_chunk
+    flush_chunk() {
+        [[ ${#chunk_files[@]} -eq 0 ]] && return 0
+        local cid
+        cid=$(printf "chunk%04d" ${chunk_idx})
+        echo "${cid}"$'\t'"${current_dir}"$'\t'"$(IFS=','; echo "${chunk_files[*]}")" >> "${CHUNKS_FILE}"
+        log "  ${cid}: ${#chunk_files[@]} files from ${current_dir}"
+        chunk_idx=$(( chunk_idx + 1 ))
+        chunk_files=()
+    }
 
-NCHUNKS=$(wc -l < "${CHUNKS_FILE}")
-log "Split into ${NCHUNKS} job(s) — auto-sized to ~${max_per_job} samples each"
+    while IFS= read -r fpath; do
+        local_dir=$(dirname "${fpath}")
+        if [[ "${local_dir}" != "${current_dir}" ]]; then
+            flush_chunk
+            current_dir="${local_dir}"
+        fi
+        chunk_files+=("${fpath}")
+        if [[ ${#chunk_files[@]} -ge ${max_per_job} ]]; then
+            flush_chunk
+        fi
+    done < "${STATE_DIR}/pending_files.txt"
+    flush_chunk
 
-touch "${ACTIVE_FILE}" "${DONE_FILE}" "${FAIL_FILE}"
+    NCHUNKS=$(wc -l < "${CHUNKS_FILE}")
+    log "Split into ${NCHUNKS} job(s) — auto-sized to ~${max_per_job} samples each"
 
-send_email "Started — ${TOMO_RUN_ID}" \
-    "Processing started.\nInput : ${SRC_MOUNT}\nChunks: ${NCHUNKS}\nMax parallel jobs: ${TOMO_MAX_JOBS}"
+    touch "${ACTIVE_FILE}" "${DONE_FILE}" "${FAIL_FILE}"
+    send_email "Started — ${TOMO_RUN_ID}" \
+        "Processing started.\nInput : ${SRC_MOUNT}\nChunks: ${NCHUNKS}\nMax parallel jobs: ${TOMO_MAX_JOBS}"
+fi
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 count_active() {

@@ -88,6 +88,19 @@ Files from different subdirectories are never mixed in one job — each subdirec
 
 ---
 
+## If your SSH disconnects or the login node reboots
+
+The orchestrator process runs on the login node. If it dies mid-run (SSH drop, reboot), **no work is lost** — all state is saved on `/beegfs`. SLURM jobs already submitted will keep running. Just reconnect and resume:
+
+```bash
+tomo_process --list                          # find your run_id
+tomo_process --resume tomo_20260729_143201   # restart the orchestrator from where it stopped
+```
+
+The orchestrator will re-adopt any SLURM jobs still in the queue and continue submitting remaining chunks.
+
+---
+
 ## Monitoring
 
 ```bash
