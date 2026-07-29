@@ -2,17 +2,80 @@
 
 This is a MATLAB codebase for **Optical Diffraction Tomography (ODT)** — reconstructing 3D refractive index maps of biological samples (e.g., MDCK cells) from interferometric holographic measurements. The pipeline converts raw holographic tomograms into quantitative 3D refractive index volumes.
 
-## Running the Pipeline
+## Quick Start — `tomo_process`
 
-This code runs on a HPC cluster (`/beegfs/home/ralajan/matlab/`). There is no build system; scripts are run directly in MATLAB. The main entry point is [field_retrieval_Tomogram_reconstruction.m](field_retrieval_Tomogram_reconstruction.m), which contains the full pipeline as sequential `%%` sections.
+`tomo_process` is the recommended way to process datasets. It handles large datasets (200 GB – 1.5 TB) that exceed the login node disk limit by streaming data through the cluster in parallel chunks.
 
-To run on the cluster:
-```matlab
-% Launch MATLAB and run:
-run('field_retrieval_Tomogram_reconstruction.m')
+### First-time setup (once per cluster account)
+
+```bash
+# 1. Clone the repo onto the cluster
+git clone <repo_url> /beegfs/home/ralajan/matlab/field_tomogram_reconstruction
+cd /beegfs/home/ralajan/matlab/field_tomogram_reconstruction
+
+# 2. Edit cluster paths if needed (partition names, scratch dir, etc.)
+nano config.sh
+
+# 3. Install the CLI
+bash install.sh
+source ~/.bashrc
 ```
 
-GPU (CUDA) is required — `gpuArray` is used extensively in `ODTReconstruction` and `ODTIteration`. The `unwrap2` function in [unwrap/](unwrap/) is a compiled MEX binary (`.mexw32`) for 2D phase unwrapping.
+### Processing a dataset
+
+Your data must be under the `guck_division/ZPE_results` share, which is mounted read-only on the cluster at `/mnt/ZPE_results`.
+
+```bash
+# Process a dataset — give the path relative to /mnt/ZPE_results/
+tomo_process --email "you@institute.de" --path "2026_MDCK/experiment_A"
+
+# Optional overrides:
+tomo_process --email "you@institute.de" --path "2026_MDCK/experiment_A" \
+    --chunk-size 15 \   # files per job (default: 10)
+    --max-jobs 3        # parallel SLURM jobs (default: 5)
+```
+
+You can **disconnect immediately** after submitting. The orchestrator runs as its own SLURM job and survives SSH disconnects.
+
+Results are written to:
+```
+/mnt/ZPE_results/2026_MDCK/experiment_A/_results/<chunk0001>/field_retrieval/
+```
+
+### Monitoring
+
+```bash
+tomo_process --list                         # all runs
+tomo_process --status tomo_20260728_143201  # progress of one run
+tomo_process --cancel tomo_20260728_143201  # cancel a run
+```
+
+### How it works
+
+```
+tomo_process (login node, exits immediately)
+  └─► sbatch orchestrator.sh  (runs as a tiny SLURM job)
+            │
+            │  for each chunk of 10 sample files:
+            ├─ rsync files from /mnt/ZPE_results → /beegfs/scratch/<run>/<chunk>/
+            ├─ sbatch <chunk_job.sh>  (up to 5 jobs in parallel)
+            │      └─ field_Retrieval.m + tomogram_Reconstruction.m
+            │      └─ rsync results → /mnt/ZPE_results/<path>/_results/
+            │      └─ rm scratch data for this chunk
+            └─ send completion email when all chunks done
+```
+
+### Manually submitting a single dataset (advanced)
+
+`main.sh` remains available for direct use when the dataset fits in scratch:
+
+```bash
+sbatch main.sh --data_dir /beegfs/home/ralajan/matlab/20260203_Cecile_MDCK
+```
+
+---
+
+## Running the Pipeline
 
 ## Pipeline Architecture
 
