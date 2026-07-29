@@ -218,7 +218,7 @@ cmd_start() {
     orch_jid=$(sbatch --parsable \
         --output="${run_scratch}/logs/orchestrator_slurm_%j.out" \
         --error="${run_scratch}/logs/orchestrator_slurm_%j.err" \
-        --export=ALL,TOMO_INPUT_PATH="${input_path}",TOMO_EMAIL="${email}",TOMO_RUN_ID="${run_id}",FILES_PER_CHUNK="${chunk_size}",MAX_PARALLEL_JOBS="${max_jobs}" \
+        --export=ALL,TOMO_REPO_DIR="${SCRIPT_DIR}",TOMO_INPUT_PATH="${input_path}",TOMO_EMAIL="${email}",TOMO_RUN_ID="${run_id}",FILES_PER_CHUNK="${chunk_size}",MAX_PARALLEL_JOBS="${max_jobs}" \
         "${orch_script}")
 
     echo "${orch_jid}" > "${run_scratch}/state/orchestrator_job_id"
