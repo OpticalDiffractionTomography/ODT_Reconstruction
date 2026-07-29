@@ -162,25 +162,27 @@ submit_chunk() {
     local chunk_results="${chunk_scratch}/results"
     mkdir -p "${chunk_data}/field_retrieval" "${chunk_results}"
 
-    # Copy each sample file AND its matching background file into chunk_data
     log "Copying files for ${chunk_id} ..."
     IFS=',' read -ra flist <<< "${files_csv}"
+
+    # bg01_Tomog.mat is a single common background shared across the whole dataset.
+    # It lives in the same directory as the sample files; copy it once per chunk.
+    local dataset_dir
+    dataset_dir=$(dirname "${flist[0]}")
+    local bg_src="${dataset_dir}/bg01_Tomog.mat"
+    if [[ -f "${bg_src}" ]]; then
+        rsync -a "${bg_src}" "${chunk_data}/" \
+            || { log "rsync failed for background ${bg_src}"; return 1; }
+        log "Copied background: bg01_Tomog.mat"
+    else
+        log "ERROR: background file not found: ${bg_src}"
+        return 1
+    fi
+
+    # Copy the sample files for this chunk
     for fpath in "${flist[@]}"; do
         rsync -a "${fpath}" "${chunk_data}/" \
             || { log "rsync copy failed for ${fpath}"; return 1; }
-
-        # Corresponding background: replace "sample" with "bg" in filename
-        local fname
-        fname=$(basename "${fpath}")
-        local bgname="${fname/sample/bg}"
-        local bgpath
-        bgpath=$(find "$(dirname "${fpath}")" -name "${bgname}" | head -1)
-        if [[ -n "${bgpath}" ]]; then
-            rsync -a "${bgpath}" "${chunk_data}/" \
-                || { log "WARNING: could not copy background ${bgpath}"; }
-        else
-            log "WARNING: no matching background found for ${fname}"
-        fi
     done
 
     # Result destination mirrors the relative path inside ZPE_results
