@@ -5,7 +5,7 @@
 # Compute nodes never touch the network mount.
 #
 # Usage:
-#   tomo_process --email <email> --path <relative_path_under_ZPE_cluster_results>
+#   tomo_process --email <email> --path <relative_path_under_guck_division2>
 #   tomo_process --status <run_id>
 #   tomo_process --list
 #   tomo_process --cancel <run_id>
@@ -20,7 +20,7 @@ source "${SCRIPT_DIR}/config.sh"
 usage() {
     cat <<EOF
 Usage:
-  tomo_process --email <email> --path <relative_path_under_ZPE_cluster_results>
+  tomo_process --email <email> --path <relative_path_under_guck_division2>
                [--chunk-size <N>]  [--max-jobs <N>]
 
   tomo_process --status <run_id>   Show status of a running/finished run
@@ -33,8 +33,8 @@ Examples:
   tomo_process --list
 
 Notes:
-  - <path> is relative to ${ZPE_RESULTS_MOUNT}/
-  - Results are written to  ${ZPE_RESULTS_MOUNT}/<path>/_results/
+  - <path> is relative to ${GUCK_DIVISION_2_MOUNT}/
+  - Results are written to  ${GUCK_DIVISION_2_MOUNT}/<path>/_results/
   - Scratch data lives in   ${SCRATCH_ROOT}/<run_id>/
   - The orchestrator runs as a nohup background process on the login node.
 EOF
@@ -176,7 +176,7 @@ cmd_start() {
     [[ -z "${input_path}" ]] && die "--path is required"
 
     input_path="${input_path#/}"
-    local src_path="${ZPE_RESULTS_MOUNT}/${input_path}"
+    local src_path="${GUCK_DIVISION_2_MOUNT}/${input_path}"
     [[ -d "${src_path}" ]] || die "Path not found: ${src_path}"
 
     local nfiles
@@ -206,7 +206,7 @@ cmd_start() {
         TOMO_MAX_JOBS="${max_jobs}" \
         TOMO_REPO_DIR="${SCRIPT_DIR}" \
         TOMO_SCRATCH_ROOT="${SCRATCH_ROOT}" \
-        TOMO_ZPE_MOUNT="${ZPE_RESULTS_MOUNT}" \
+        TOMO_DATA_MOUNT="${GUCK_DIVISION_2_MOUNT}" \
         TOMO_POLL_INTERVAL="${POLL_INTERVAL}" \
         TOMO_SLURM_PARTITION="${SLURM_PARTITION}" \
         TOMO_SLURM_GRES="${SLURM_GRES}" \
@@ -226,7 +226,7 @@ cmd_start() {
     info "  tomo_process --list"
     info ""
     info "Results will appear at:"
-    info "  ${ZPE_RESULTS_MOUNT}/${input_path}/_results/"
+    info "  ${GUCK_DIVISION_2_MOUNT}/${input_path}/_results/"
     info ""
     info "Full log:"
     info "  ${run_scratch}/logs/orchestrator.log"

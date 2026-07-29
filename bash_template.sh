@@ -74,6 +74,6 @@ run_stage field_Retrieval.m
 run_stage tomogram_Reconstruction.m
 
 # Signal success — the login-node orchestrator will rsync results from
-# ${DATA_DIR}/field_retrieval/ back to /mnt/ZPE_cluster_results.
+# ${DATA_DIR}/field_retrieval/ back to /mnt/guck_division2.
 touch "${CHUNK_DONE}"
 log "=== Job complete: __JOB_NAME__ ==="

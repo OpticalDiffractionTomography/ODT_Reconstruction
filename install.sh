@@ -13,11 +13,11 @@ echo "Repo : ${REPO_DIR}"
 echo ""
 
 # ── 1. Verify mount point ─────────────────────────────────────────────────────
-echo "[1/4] Checking ZPE_results mount ..."
-if mountpoint -q "${ZPE_RESULTS_MOUNT}" 2>/dev/null || [[ -d "${ZPE_RESULTS_MOUNT}" ]]; then
-    echo "      OK: ${ZPE_RESULTS_MOUNT} is accessible"
+echo "[1/4] Checking guck_division2 mount ..."
+if mountpoint -q "${GUCK_DIVISION_2_MOUNT}" 2>/dev/null || [[ -d "${GUCK_DIVISION_2_MOUNT}" ]]; then
+    echo "      OK: ${GUCK_DIVISION_2_MOUNT} is accessible"
 else
-    echo "      WARNING: ${ZPE_RESULTS_MOUNT} is not mounted or not accessible."
+    echo "      WARNING: ${GUCK_DIVISION_2_MOUNT} is not mounted or not accessible."
     echo "      The pipeline will fail at runtime if this is not resolved."
     echo "      (Continuing install anyway.)"
 fi

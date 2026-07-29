@@ -23,10 +23,10 @@ source ~/.bashrc
 
 ### Processing a dataset
 
-Your data must be under the `guck_division/ZPE_results` share, which is mounted read-only on the cluster at `/mnt/ZPE_results`.
+Your data must be under the `guck_division2` share, which is mounted read-only on the cluster at `/mnt/guck_division2`.
 
 ```bash
-# Process a dataset — give the path relative to /mnt/ZPE_results/
+# Process a dataset — give the path relative to /mnt/guck_division2/
 tomo_process --email "you@institute.de" --path "2026_MDCK/experiment_A"
 
 # Optional overrides:
@@ -39,7 +39,7 @@ You can **disconnect immediately** after submitting. The orchestrator runs as it
 
 Results are written to:
 ```
-/mnt/ZPE_results/2026_MDCK/experiment_A/_results/<chunk0001>/field_retrieval/
+/mnt/guck_division2/2026_MDCK/experiment_A/_results/<chunk0001>/field_retrieval/
 ```
 
 ### Monitoring
@@ -57,10 +57,10 @@ tomo_process (login node, exits immediately)
   └─► sbatch orchestrator.sh  (runs as a tiny SLURM job)
             │
             │  for each chunk of 10 sample files:
-            ├─ rsync files from /mnt/ZPE_results → /beegfs/scratch/<run>/<chunk>/
+            ├─ rsync files from /mnt/guck_division2 → /beegfs/scratch/<run>/<chunk>/
             ├─ sbatch <chunk_job.sh>  (up to 5 jobs in parallel)
             │      └─ field_Retrieval.m + tomogram_Reconstruction.m
-            │      └─ rsync results → /mnt/ZPE_results/<path>/_results/
+            │      └─ rsync results → /mnt/guck_division2/<path>/_results/
             │      └─ rm scratch data for this chunk
             └─ send completion email when all chunks done
 ```
