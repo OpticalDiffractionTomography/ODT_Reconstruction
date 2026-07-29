@@ -220,7 +220,7 @@ cmd_start() {
         TOMO_SLURM_CPUS="${SLURM_CPUS}" \
         TOMO_SLURM_MEM="${SLURM_MEM}" \
         TOMO_SLURM_TIME="${SLURM_TIME}" \
-        bash "${SCRIPT_DIR}/orchestrator.sh" \
+        bash "${SCRIPT_DIR}/scripts/orchestrator.sh" \
         >> "${run_scratch}/logs/orchestrator.log" 2>&1 &
 
     local bg_pid=$!

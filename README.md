@@ -161,7 +161,7 @@ field_retrieval_zpe_results/
 ```
 tomo_process (runs on login node, exits immediately after submitting)
   │
-  └─► nohup orchestrator.sh (stays running on login node as background process)
+  └─► nohup scripts/orchestrator.sh (stays running on login node as background process)
             │
             │  Groups sample files by subdirectory, auto-sizes chunks from walltime
             │
@@ -186,10 +186,10 @@ The login node handles all network mount access (`/mnt/...`) because compute nod
 If your dataset fits within scratch space and you want to submit directly:
 
 ```bash
-sbatch main.sh --data_dir /beegfs/home/ralajan/scratch/my_experiment
+sbatch scripts/main.sh --data_dir /beegfs/home/ralajan/scratch/my_experiment
 ```
 
-`main.sh` runs both stages sequentially on one GPU node. It does not handle copying from/to the network mounts — you must do that manually.
+`scripts/main.sh` runs both stages sequentially on one GPU node. It does not handle copying from/to the network mounts — you must do that manually.
 
 </details>
 

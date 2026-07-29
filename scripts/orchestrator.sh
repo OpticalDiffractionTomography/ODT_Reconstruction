@@ -213,7 +213,7 @@ submit_chunk() {
         -e "s|__CPUS__|${TOMO_SLURM_CPUS}|g" \
         -e "s|__MEM__|${TOMO_SLURM_MEM}|g" \
         -e "s|__TIME__|${TOMO_SLURM_TIME}|g" \
-        "${TOMO_REPO_DIR}/bash_template.sh" > "${job_script}"
+        "${TOMO_REPO_DIR}/scripts/bash_template.sh" > "${job_script}"
     chmod +x "${job_script}"
 
     local jid
