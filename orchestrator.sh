@@ -22,7 +22,10 @@
 set -euo pipefail
 
 # ── Source config ─────────────────────────────────────────────────────────────
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# REPO_DIR is injected via --export by tomo_process; BASH_SOURCE[0] resolves
+# to the SLURM spool copy and cannot be used to locate the repo.
+: "${TOMO_REPO_DIR:?TOMO_REPO_DIR not set — was this submitted by tomo_process?}"
+REPO_DIR="${TOMO_REPO_DIR}"
 # shellcheck source=config.sh
 source "${REPO_DIR}/config.sh"
 
