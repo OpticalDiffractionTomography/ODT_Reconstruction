@@ -5,7 +5,7 @@
 # Required environment variables (set by tomo_process via export):
 #   TOMO_RUN_ID, TOMO_INPUT_PATH, TOMO_EMAIL,
 #   TOMO_CHUNK_SIZE, TOMO_MAX_JOBS, TOMO_REPO_DIR,
-#   TOMO_SCRATCH_ROOT, TOMO_DATA_MOUNT,
+#   TOMO_SCRATCH_ROOT, TOMO_DATA_MOUNT, TOMO_RESULTS_MOUNT,
 #   TOMO_POLL_INTERVAL, TOMO_SLURM_PARTITION, TOMO_SLURM_GRES,
 #   TOMO_SLURM_CPUS, TOMO_SLURM_MEM, TOMO_SLURM_TIME
 
@@ -58,7 +58,7 @@ send_email() {
 log "=== Orchestrator start (pid $$) ==="
 log "Run ID  : ${TOMO_RUN_ID}"
 log "Input   : ${SRC_MOUNT}"
-log "Results : <src_dir>/field_retrieval_zpe_results/ (per source directory)"
+log "Results : ${TOMO_RESULTS_MOUNT}/<rel_path>/field_retrieval_zpe_results/ (per source dir)"
 log "Scratch : ${RUN_SCRATCH}"
 
 # ── Discover and chunk files ──────────────────────────────────────────────────
@@ -132,7 +132,7 @@ collect_finished() {
             local src_dir
             src_dir=$(awk -F'\t' -v c="${cid}" '$1==c {print $2}' "${CHUNKS_FILE}")
             local rel_src="${src_dir#${TOMO_DATA_MOUNT}/}"
-            local dst_dir="${TOMO_DATA_MOUNT}/${rel_src}/field_retrieval_zpe_results"
+            local dst_dir="${TOMO_RESULTS_MOUNT}/${rel_src}/field_retrieval_zpe_results"
             log "Chunk ${cid} done — copying results to ${dst_dir}/"
             mkdir -p "${dst_dir}"
             rsync -a "${RUN_SCRATCH}/${cid}/data/field_retrieval/" "${dst_dir}/" \

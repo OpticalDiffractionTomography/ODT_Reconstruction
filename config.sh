@@ -5,7 +5,8 @@
 # ── Cluster paths ────────────────────────────────────────────────────────────
 
 # Root of the read-only network mount on the cluster
-GUCK_DIVISION_2_MOUNT="/mnt/guck_division2"
+GUCK_DIVISION_2_MOUNT="/mnt/guck_division2"    # read-only: input data
+ZPE_RESULTS_MOUNT="/mnt/ZPE_cluster_results"   # writable: results output
 
 # Scratch space for staging data during processing
 SCRATCH_ROOT="/beegfs/home/ralajan/scratch/tomo_process"
