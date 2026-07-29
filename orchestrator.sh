@@ -27,11 +27,28 @@ DONE_FILE="${STATE_DIR}/done_chunks.txt"
 FAIL_FILE="${STATE_DIR}/failed_chunks.txt"
 
 # ── Logging ───────────────────────────────────────────────────────────────────
-log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "${ORCH_LOG}"; }
+# stdout/stderr are already redirected to ORCH_LOG by nohup in tomo_process;
+# write only to stdout here to avoid duplicate lines from tee.
+log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
 
 send_email() {
     local subject="$1" body="$2"
-    echo -e "${body}" | mail -s "[tomo_process] ${subject}" "${TOMO_EMAIL}" 2>/dev/null || true
+    # Try sendmail first (available on most HPC login nodes), then mail, then
+    # fall back to a notification file the user can read with --status.
+    local full_subject="[tomo_process] ${subject}"
+    local sent=false
+    if command -v sendmail &>/dev/null; then
+        printf "Subject: %s\nTo: %s\n\n%b\n" \
+            "${full_subject}" "${TOMO_EMAIL}" "${body}" \
+            | sendmail "${TOMO_EMAIL}" 2>/dev/null && sent=true
+    fi
+    if ! "${sent}" && command -v mail &>/dev/null; then
+        echo -e "${body}" | mail -s "${full_subject}" "${TOMO_EMAIL}" 2>/dev/null && sent=true
+    fi
+    # Always write a notification file as fallback
+    local note_file="${LOG_DIR}/notification_$(date '+%Y%m%d_%H%M%S').txt"
+    printf "Subject: %s\n\n%b\n" "${full_subject}" "${body}" > "${note_file}"
+    "${sent}" || log "NOTE: email not sent (no mail relay); notification saved to ${note_file}"
 }
 
 log "=== Orchestrator start (pid $$) ==="
