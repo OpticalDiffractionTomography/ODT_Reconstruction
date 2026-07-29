@@ -34,6 +34,6 @@ SLURM_TIME="24:00:00"
 
 # ── SLURM resources for the orchestrator job itself ───────────────────────────
 
-ORCH_PARTITION="short"       # low-resource partition; adjust to your cluster's name
+ORCH_PARTITION="cpu"         # low-resource partition; adjust to your cluster's name
 ORCH_TIME="72:00:00"         # max orchestrator runtime (must exceed total dataset time)
 ORCH_MEM="4G"
