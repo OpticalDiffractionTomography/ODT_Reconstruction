@@ -21,7 +21,7 @@ usage() {
     cat <<EOF
 Usage:
   tomo_process --email <email> --path <relative_path_under_guck_division2>
-               [--chunk-size <N>]  [--max-jobs <N>]
+               [--max-jobs <N>]  [--mins-per-sample <N>]
 
   tomo_process --status <run_id>   Show status of a running/finished run
   tomo_process --list              List all runs
@@ -34,10 +34,13 @@ Examples:
 
 Notes:
   - <path> is relative to ${GUCK_DIVISION_2_MOUNT}/
-  - The path can contain multiple subdirectories; all sample*_Tomog.mat files
-    found recursively underneath it will be processed.
-  - Results mirror the input subdirectory structure under <path>/_results/
-  - Scratch data lives in   ${SCRATCH_ROOT}/<run_id>/
+  - <path> can contain multiple subdirectories; all sample*_Tomog.mat files
+    found recursively will be processed.
+  - Chunk size is auto-derived: floor(walltime / --mins-per-sample).
+    Default ${SLURM_TIME} walltime / ${MINS_PER_SAMPLE} min = $(( $(echo ${SLURM_TIME} | awk -F: '{print $1*60+$2}') / MINS_PER_SAMPLE )) samples per job.
+  - Override per-sample estimate if your data is faster/slower: --mins-per-sample 10
+  - Results: ${ZPE_RESULTS_MOUNT}/<rel_path>/field_retrieval_zpe_results/
+  - Scratch : ${SCRATCH_ROOT}/<run_id>/
   - The orchestrator runs as a nohup background process on the login node.
 EOF
 }
@@ -161,15 +164,15 @@ cmd_cancel() {
 # ── Sub-command: start ────────────────────────────────────────────────────────
 cmd_start() {
     local email="" input_path=""
-    local chunk_size="${FILES_PER_CHUNK}"
     local max_jobs="${MAX_PARALLEL_JOBS}"
+    local mins_per_sample="${MINS_PER_SAMPLE}"
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --email)      email="$2";       shift 2 ;;
-            --path)       input_path="$2";  shift 2 ;;
-            --chunk-size) chunk_size="$2";  shift 2 ;;
-            --max-jobs)   max_jobs="$2";    shift 2 ;;
+            --email)           email="$2";           shift 2 ;;
+            --path)            input_path="$2";      shift 2 ;;
+            --max-jobs)        max_jobs="$2";        shift 2 ;;
+            --mins-per-sample) mins_per_sample="$2"; shift 2 ;;
             *) die "Unknown argument: $1. Run 'tomo_process --help' for usage." ;;
         esac
     done
@@ -194,10 +197,10 @@ cmd_start() {
 
     local pid_file="${run_scratch}/state/orchestrator.pid"
 
-    info "Run ID    : ${run_id}"
-    info "Scratch   : ${run_scratch}"
-    info "Chunk size: ${chunk_size} files"
-    info "Max jobs  : ${max_jobs}"
+    info "Run ID          : ${run_id}"
+    info "Scratch         : ${run_scratch}"
+    info "Max parallel jobs: ${max_jobs}"
+    info "Mins per sample : ${mins_per_sample} (chunk size auto-derived from walltime ${SLURM_TIME})"
 
     # Launch orchestrator.sh as a nohup background process on the login node.
     # Pass all config via environment variables prefixed TOMO_ to avoid clashes.
@@ -205,8 +208,8 @@ cmd_start() {
         TOMO_RUN_ID="${run_id}" \
         TOMO_INPUT_PATH="${input_path}" \
         TOMO_EMAIL="${email}" \
-        TOMO_CHUNK_SIZE="${chunk_size}" \
         TOMO_MAX_JOBS="${max_jobs}" \
+        TOMO_MINS_PER_SAMPLE="${mins_per_sample}" \
         TOMO_REPO_DIR="${SCRIPT_DIR}" \
         TOMO_SCRATCH_ROOT="${SCRATCH_ROOT}" \
         TOMO_DATA_MOUNT="${GUCK_DIVISION_2_MOUNT}" \

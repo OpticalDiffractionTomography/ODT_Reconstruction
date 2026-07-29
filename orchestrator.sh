@@ -7,7 +7,7 @@
 #   TOMO_CHUNK_SIZE, TOMO_MAX_JOBS, TOMO_REPO_DIR,
 #   TOMO_SCRATCH_ROOT, TOMO_DATA_MOUNT, TOMO_RESULTS_MOUNT,
 #   TOMO_POLL_INTERVAL, TOMO_SLURM_PARTITION, TOMO_SLURM_GRES,
-#   TOMO_SLURM_CPUS, TOMO_SLURM_MEM, TOMO_SLURM_TIME
+#   TOMO_SLURM_CPUS, TOMO_SLURM_MEM, TOMO_SLURM_TIME, TOMO_MINS_PER_SAMPLE
 
 set -euo pipefail
 
@@ -62,9 +62,17 @@ log "Results : ${TOMO_RESULTS_MOUNT}/<rel_path>/field_retrieval_zpe_results/ (pe
 log "Scratch : ${RUN_SCRATCH}"
 
 # ── Discover and chunk files ──────────────────────────────────────────────────
-# Group by source directory first — MATLAB's spath must point to a single flat
-# directory containing sample + background files, so we never mix directories
-# within one chunk. Each chunk line: chunk_id <TAB> src_dir <TAB> file1,file2,...
+# Rules:
+#   1. Never mix files from different source directories in one chunk
+#      (MATLAB's spath must be a single flat dir with bg + sample files).
+#   2. Auto-size chunk capacity from walltime budget:
+#        max_per_job = floor(walltime_minutes / MINS_PER_SAMPLE)
+#      so each job comfortably fits within SLURM_TIME with a safety margin.
+#   3. If a subdirectory has more samples than max_per_job, split it into
+#      multiple sequential jobs — still no directory mixing.
+#
+# chunks.txt format: chunk_id <TAB> src_dir <TAB> file1,file2,...
+
 find "${SRC_MOUNT}" -name "sample*_Tomog.mat" | sort > "${STATE_DIR}/pending_files.txt"
 TOTAL=$(wc -l < "${STATE_DIR}/pending_files.txt")
 log "Found ${TOTAL} sample files"
@@ -75,6 +83,14 @@ if [[ "${TOTAL}" -eq 0 ]]; then
     exit 1
 fi
 
+# Derive max samples per job from walltime (HH:MM:SS) and per-sample estimate
+walltime_h=$(echo "${TOMO_SLURM_TIME}" | cut -d: -f1)
+walltime_m=$(echo "${TOMO_SLURM_TIME}" | cut -d: -f2)
+walltime_mins=$(( 10#${walltime_h} * 60 + 10#${walltime_m} ))
+max_per_job=$(( walltime_mins / TOMO_MINS_PER_SAMPLE ))
+[[ "${max_per_job}" -lt 1 ]] && max_per_job=1
+log "Walltime ${TOMO_SLURM_TIME} / ${TOMO_MINS_PER_SAMPLE} min per sample → max ${max_per_job} samples per job"
+
 chunk_idx=0
 current_dir=""
 chunk_files=()
@@ -84,26 +100,26 @@ flush_chunk() {
     local cid
     cid=$(printf "chunk%04d" ${chunk_idx})
     echo "${cid}"$'\t'"${current_dir}"$'\t'"$(IFS=','; echo "${chunk_files[*]}")" >> "${CHUNKS_FILE}"
+    log "  ${cid}: ${#chunk_files[@]} files from ${current_dir}"
     chunk_idx=$(( chunk_idx + 1 ))
     chunk_files=()
 }
 
 while IFS= read -r fpath; do
     local_dir=$(dirname "${fpath}")
-    # New source directory — flush current chunk and start fresh
     if [[ "${local_dir}" != "${current_dir}" ]]; then
         flush_chunk
         current_dir="${local_dir}"
     fi
     chunk_files+=("${fpath}")
-    if [[ ${#chunk_files[@]} -ge ${TOMO_CHUNK_SIZE} ]]; then
+    if [[ ${#chunk_files[@]} -ge ${max_per_job} ]]; then
         flush_chunk
     fi
 done < "${STATE_DIR}/pending_files.txt"
-flush_chunk  # flush any remaining files
+flush_chunk
 
 NCHUNKS=$(wc -l < "${CHUNKS_FILE}")
-log "Split into ${NCHUNKS} chunks of up to ${TOMO_CHUNK_SIZE} files (grouped by directory)"
+log "Split into ${NCHUNKS} job(s) — auto-sized to ~${max_per_job} samples each"
 
 touch "${ACTIVE_FILE}" "${DONE_FILE}" "${FAIL_FILE}"
 
