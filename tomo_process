@@ -177,7 +177,8 @@ cmd_start() {
     [[ -z "${email}" ]]      && die "--email is required"
     [[ -z "${input_path}" ]] && die "--path is required"
 
-    input_path="${input_path#/}"
+    input_path="${input_path//\\//}"   # backslash → forward slash
+    input_path="${input_path#/}"       # strip any leading slash
     local src_path="${GUCK_DIVISION_2_MOUNT}/${input_path}"
     [[ -d "${src_path}" ]] || die "Path not found: ${src_path}"
 
