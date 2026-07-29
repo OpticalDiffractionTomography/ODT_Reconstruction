@@ -28,13 +28,15 @@ Usage:
   tomo_process --cancel <run_id>   Cancel an active run
 
 Examples:
-  tomo_process --email me@lab.de --path "Raghava/20260715_RPE/ODT"
+  tomo_process --email me@lab.de --path "Raghava/20260715_RPE"
   tomo_process --status tomo_20260729_143201
   tomo_process --list
 
 Notes:
   - <path> is relative to ${GUCK_DIVISION_2_MOUNT}/
-  - Results are written to  ${GUCK_DIVISION_2_MOUNT}/<path>/_results/
+  - The path can contain multiple subdirectories; all sample*_Tomog.mat files
+    found recursively underneath it will be processed.
+  - Results mirror the input subdirectory structure under <path>/_results/
   - Scratch data lives in   ${SCRATCH_ROOT}/<run_id>/
   - The orchestrator runs as a nohup background process on the login node.
 EOF

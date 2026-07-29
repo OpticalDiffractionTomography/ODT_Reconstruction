@@ -115,12 +115,16 @@ collect_finished() {
         local fail_marker="${RUN_SCRATCH}/${cid}/FAIL"
 
         if [[ -f "${done_marker}" ]]; then
-            log "Chunk ${cid} done — copying results to ${DST_RESULTS}/${cid}/"
-            mkdir -p "${DST_RESULTS}/${cid}"
-            rsync -a "${RUN_SCRATCH}/${cid}/data/field_retrieval/" \
-                "${DST_RESULTS}/${cid}/field_retrieval/" \
-                && log "Results copied for ${cid}" \
-                || log "WARNING: rsync to /mnt failed for ${cid}"
+            log "Chunk ${cid} done — copying results back to ${DST_RESULTS}/"
+            # Preserve the subdirectory structure: data/<rel_path>/field_retrieval/ → _results/<rel_path>/field_retrieval/
+            while IFS= read -r -d '' fr_dir; do
+                local rel_path="${fr_dir#${RUN_SCRATCH}/${cid}/data/}"
+                local dst_dir="${DST_RESULTS}/${rel_path}"
+                mkdir -p "${dst_dir}"
+                rsync -a "${fr_dir}/" "${dst_dir}/" \
+                    && log "  Results copied: ${rel_path}" \
+                    || log "WARNING: rsync failed for ${rel_path}"
+            done < <(find "${RUN_SCRATCH}/${cid}/data" -type d -name "field_retrieval" -print0)
             rm -rf "${RUN_SCRATCH:?}/${cid}"
             echo "${cid}" >> "${DONE_FILE}"
 
@@ -144,26 +148,36 @@ submit_chunk() {
     local chunk_data="${chunk_scratch}/data"
     mkdir -p "${chunk_data}/field_retrieval"
 
-    # Copy common background file (lives alongside sample files, login node has /mnt access)
+    # Copy sample files, preserving subdirectory structure under chunk_data
     IFS=',' read -ra flist <<< "${files_csv}"
-    local dataset_dir
-    dataset_dir=$(dirname "${flist[0]}")
-    local bg_src="${dataset_dir}/bg001_Tomog.mat"
-    if [[ -f "${bg_src}" ]]; then
-        rsync -a "${bg_src}" "${chunk_data}/" \
-            || { log "ERROR: rsync failed for background ${bg_src}"; return 1; }
-        log "  Copied: bg001_Tomog.mat"
-    else
-        log "ERROR: background not found: ${bg_src}"
-        return 1
-    fi
-
-    # Copy sample files for this chunk
     for fpath in "${flist[@]}"; do
-        rsync -a "${fpath}" "${chunk_data}/" \
+        local rel_dir
+        rel_dir=$(dirname "${fpath#${TOMO_DATA_MOUNT}/}")
+        mkdir -p "${chunk_data}/${rel_dir}"
+        rsync -a "${fpath}" "${chunk_data}/${rel_dir}/" \
             || { log "ERROR: rsync failed for ${fpath}"; return 1; }
     done
     log "  Copied ${#flist[@]} sample files for ${cid}"
+
+    # Copy bg001_Tomog.mat from every unique subdirectory represented in this chunk
+    declare -A seen_dirs
+    for fpath in "${flist[@]}"; do
+        local src_dir
+        src_dir=$(dirname "${fpath}")
+        [[ -n "${seen_dirs[${src_dir}]+x}" ]] && continue
+        seen_dirs["${src_dir}"]=1
+        local bg_src="${src_dir}/bg001_Tomog.mat"
+        local rel_dir
+        rel_dir=$(dirname "${fpath#${TOMO_DATA_MOUNT}/}")
+        if [[ -f "${bg_src}" ]]; then
+            rsync -a "${bg_src}" "${chunk_data}/${rel_dir}/" \
+                || { log "ERROR: rsync failed for background ${bg_src}"; return 1; }
+            log "  Copied: ${rel_dir}/bg001_Tomog.mat"
+        else
+            log "ERROR: background not found: ${bg_src}"
+            return 1
+        fi
+    done
 
     # Generate job script from template
     local job_script="${JOBS_DIR}/${cid}.sh"
