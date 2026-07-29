@@ -7,8 +7,7 @@
 #   __JOB_NAME__      unique name for this chunk  (e.g. tomo_20260728_chunk003)
 #   __LOG_DIR__       directory for out/err logs
 #   __EMAIL__         user email for SLURM notifications
-#   __DATA_DIR__      chunk staging dir on scratch  (/beegfs/.../scratch/<run>/<chunk>)
-#   __RESULT_DIR__    where to rsync results after processing
+#   __DATA_DIR__      chunk staging dir on scratch  (/beegfs/.../scratch/<run>/<chunk>/data)
 #   __CHUNK_DONE__    touch-file path; orchestrator watches for this
 #   __CHUNK_FAIL__    touch-file path written on failure
 #   __PARTITION__     SLURM partition
@@ -16,6 +15,9 @@
 #   __CPUS__          CPUs per task
 #   __MEM__           RAM
 #   __TIME__          walltime
+#
+# NOTE: This job never touches /mnt — all /mnt access happens on the login node
+# via the tomo_process orchestrator (rsync in, rsync out).
 
 #SBATCH -J __JOB_NAME__
 #SBATCH -o __LOG_DIR__/__JOB_NAME__.out
@@ -34,7 +36,6 @@
 set -euo pipefail
 
 DATA_DIR="__DATA_DIR__"
-RESULT_DIR="__RESULT_DIR__"
 CHUNK_DONE="__CHUNK_DONE__"
 CHUNK_FAIL="__CHUNK_FAIL__"
 REPO_DIR="__REPO_DIR__"
@@ -68,23 +69,11 @@ run_stage() {
 
 log "=== Job start: __JOB_NAME__ ==="
 log "Data dir : ${DATA_DIR}"
-log "Result dir: ${RESULT_DIR}"
 
 run_stage field_Retrieval.m
 run_stage tomogram_Reconstruction.m
 
-# ── Copy results back ─────────────────────────────────────────────────────────
-log "Copying results to ${RESULT_DIR}"
-mkdir -p "${RESULT_DIR}"
-
-# Sync the field_retrieval output sub-directory (contains .mat, .tif, .png)
-rsync -av --no-perms \
-    "${DATA_DIR}/field_retrieval/" \
-    "${RESULT_DIR}/field_retrieval/" \
-    || { log "rsync failed"; exit 1; }
-
-log "Results synced successfully"
-
-# ── Signal completion ─────────────────────────────────────────────────────────
+# Signal success — the login-node orchestrator will rsync results from
+# ${DATA_DIR}/field_retrieval/ back to /mnt/ZPE_cluster_results.
 touch "${CHUNK_DONE}"
 log "=== Job complete: __JOB_NAME__ ==="

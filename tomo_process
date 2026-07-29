@@ -1,8 +1,12 @@
 #!/bin/bash
 # tomo_process — CLI entry point for the tomogram processing pipeline.
 #
+# All /mnt access happens here on the login node. Compute nodes never touch
+# the network mount. The orchestrator loop runs as a nohup background process
+# so the user can disconnect after submitting.
+#
 # Usage:
-#   tomo_process --email "you@institute.de" --path "2026_MDCK/experiment1"
+#   tomo_process --email <email> --path <relative_path_under_ZPE_cluster_results>
 #   tomo_process --status <run_id>
 #   tomo_process --list
 #   tomo_process --cancel <run_id>
@@ -17,24 +21,23 @@ source "${SCRIPT_DIR}/config.sh"
 usage() {
     cat <<EOF
 Usage:
-  tomo_process --email <email> --path <relative_path_under_ZPE_results>
+  tomo_process --email <email> --path <relative_path_under_ZPE_cluster_results>
                [--chunk-size <N>]  [--max-jobs <N>]
 
-  tomo_process --status <run_id>   Show status of a running/finished job
+  tomo_process --status <run_id>   Show status of a running/finished run
   tomo_process --list              List all runs
-  tomo_process --cancel <run_id>   Cancel an active run (scancel all its jobs)
-  tomo_process --help
+  tomo_process --cancel <run_id>   Cancel an active run
 
 Examples:
-  tomo_process --email me@lab.de --path "2026_MDCK/batch_A"
-  tomo_process --status tomo_20260728_143201
+  tomo_process --email me@lab.de --path "Raghava/20260715_RPE/ODT"
+  tomo_process --status tomo_20260729_143201
   tomo_process --list
 
 Notes:
   - <path> is relative to ${ZPE_RESULTS_MOUNT}/
   - Results are written to  ${ZPE_RESULTS_MOUNT}/<path>/_results/
   - Scratch data lives in   ${SCRATCH_ROOT}/<run_id>/
-  - The orchestrator runs as a SLURM job and survives SSH disconnects.
+  - The orchestrator runs as a nohup background process on the login node.
 EOF
 }
 
@@ -54,24 +57,19 @@ cmd_list() {
         local run_id
         run_id=$(basename "${run_dir}")
         local state_dir="${run_dir}/state"
-        local log_dir="${run_dir}/logs"
-        local orch_log="${log_dir}/orchestrator.log"
 
         local done_n fail_n total_n
         done_n=$(wc -l < "${state_dir}/done_chunks.txt" 2>/dev/null || echo 0)
         fail_n=$(wc -l < "${state_dir}/failed_chunks.txt" 2>/dev/null || echo 0)
         total_n=$(wc -l < "${state_dir}/chunks.txt" 2>/dev/null || echo "?")
 
-        # Check if orchestrator job is still queued
-        local orch_jid_file="${state_dir}/orchestrator_job_id"
-        local status="unknown"
-        if [[ -f "${orch_jid_file}" ]]; then
-            local jid
-            jid=$(cat "${orch_jid_file}")
-            if squeue -j "${jid}" -h &>/dev/null 2>&1; then
-                status="running (SLURM ${jid})"
-            else
-                status="finished"
+        local pid_file="${state_dir}/orchestrator.pid"
+        local status="finished"
+        if [[ -f "${pid_file}" ]]; then
+            local pid
+            pid=$(cat "${pid_file}")
+            if kill -0 "${pid}" 2>/dev/null; then
+                status="running (pid ${pid})"
             fi
         fi
 
@@ -137,33 +135,247 @@ cmd_cancel() {
     [[ -d "${run_dir}" ]] || die "Run not found: ${run_id}"
 
     local state_dir="${run_dir}/state"
-    local cancelled=0
 
-    # Cancel orchestrator job
-    local orch_jid_file="${state_dir}/orchestrator_job_id"
-    if [[ -f "${orch_jid_file}" ]]; then
-        local jid
-        jid=$(cat "${orch_jid_file}")
-        scancel "${jid}" 2>/dev/null && info "Cancelled orchestrator job ${jid}" || true
-        cancelled=1
+    # Kill orchestrator background process
+    local pid_file="${state_dir}/orchestrator.pid"
+    if [[ -f "${pid_file}" ]]; then
+        local pid
+        pid=$(cat "${pid_file}")
+        if kill -0 "${pid}" 2>/dev/null; then
+            kill "${pid}" && info "Stopped orchestrator (pid ${pid})"
+        else
+            info "Orchestrator process ${pid} is not running"
+        fi
     fi
 
-    # Cancel all active processing jobs
+    # Cancel all active SLURM jobs
     if [[ -f "${state_dir}/active_jobs.txt" ]]; then
         while IFS=$'\t' read -r cid jid; do
             scancel "${jid}" 2>/dev/null && info "Cancelled chunk ${cid} (job ${jid})" || true
-            cancelled=1
         done < "${state_dir}/active_jobs.txt"
     fi
 
-    [[ "${cancelled}" -eq 0 ]] && info "No active jobs found to cancel."
     info "Run ${run_id} cancelled. Scratch data left at ${run_dir} for inspection."
 }
 
-# ── Sub-command: start (default) ──────────────────────────────────────────────
+# ── Orchestrator loop (runs in background on login node) ─────────────────────
+run_orchestrator() {
+    # All args passed as environment variables by the caller:
+    #   RUN_ID, INPUT_PATH, EMAIL, CHUNK_SIZE, MAX_JOBS, REPO_DIR_VAR
+
+    local run_scratch="${SCRATCH_ROOT}/${RUN_ID}"
+    local state_dir="${run_scratch}/state"
+    local log_dir="${run_scratch}/logs"
+    local jobs_dir="${run_scratch}/jobs"
+
+    local src_mount="${ZPE_RESULTS_MOUNT}/${INPUT_PATH}"
+    local dst_results="${src_mount}/_results"
+
+    local orch_log="${log_dir}/orchestrator.log"
+    local chunks_file="${state_dir}/chunks.txt"
+    local active_file="${state_dir}/active_jobs.txt"
+    local done_file="${state_dir}/done_chunks.txt"
+    local fail_file="${state_dir}/failed_chunks.txt"
+
+    log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "${orch_log}"; }
+
+    send_email() {
+        local subject="$1" body="$2"
+        echo -e "${body}" | mail -s "[tomo_process] ${subject}" "${EMAIL}" 2>/dev/null || true
+    }
+
+    log "=== Orchestrator start (pid $$) ==="
+    log "Run ID  : ${RUN_ID}"
+    log "Input   : ${src_mount}"
+    log "Results : ${dst_results}"
+    log "Scratch : ${run_scratch}"
+
+    # ── Discover and chunk files (login node has /mnt access) ────────────────
+    find "${src_mount}" -name "sample*_Tomog.mat" | sort > "${state_dir}/pending_files.txt"
+    local total
+    total=$(wc -l < "${state_dir}/pending_files.txt")
+    log "Found ${total} sample files"
+
+    # Split into chunks of CHUNK_SIZE
+    local chunk_idx=0
+    local chunk_files=()
+    while IFS= read -r fpath; do
+        chunk_files+=("${fpath}")
+        if [[ ${#chunk_files[@]} -ge ${CHUNK_SIZE} ]]; then
+            local cid
+            cid=$(printf "chunk%04d" ${chunk_idx})
+            echo "${cid}"$'\t'"$(IFS=','; echo "${chunk_files[*]}")" >> "${chunks_file}"
+            chunk_idx=$(( chunk_idx + 1 ))
+            chunk_files=()
+        fi
+    done < "${state_dir}/pending_files.txt"
+    if [[ ${#chunk_files[@]} -gt 0 ]]; then
+        local cid
+        cid=$(printf "chunk%04d" ${chunk_idx})
+        echo "${cid}"$'\t'"$(IFS=','; echo "${chunk_files[*]}")" >> "${chunks_file}"
+    fi
+
+    local nchunks
+    nchunks=$(wc -l < "${chunks_file}")
+    log "Split into ${nchunks} chunks of up to ${CHUNK_SIZE} files"
+
+    send_email "Started — ${RUN_ID}" \
+        "Processing started.\nInput : ${src_mount}\nChunks: ${nchunks}\nMax parallel jobs: ${MAX_JOBS}"
+
+    # ── Helpers ───────────────────────────────────────────────────────────────
+    count_active() {
+        local n=0
+        [[ -s "${active_file}" ]] || { echo 0; return; }
+        while IFS=$'\t' read -r cid jid; do
+            squeue -j "${jid}" -h &>/dev/null 2>&1 && n=$(( n + 1 ))
+        done < "${active_file}"
+        echo "${n}"
+    }
+
+    collect_finished() {
+        [[ -s "${active_file}" ]] || return
+        local still_active=""
+        while IFS=$'\t' read -r cid jid; do
+            local done_marker="${run_scratch}/${cid}/DONE"
+            local fail_marker="${run_scratch}/${cid}/FAIL"
+
+            if [[ -f "${done_marker}" ]]; then
+                log "Chunk ${cid} done — copying results to ${dst_results}/${cid}/"
+                mkdir -p "${dst_results}/${cid}"
+                rsync -a "${run_scratch}/${cid}/data/field_retrieval/" \
+                    "${dst_results}/${cid}/field_retrieval/" \
+                    && log "Results copied for ${cid}" \
+                    || log "WARNING: rsync to /mnt failed for ${cid}"
+                rm -rf "${run_scratch:?}/${cid}"
+                echo "${cid}" >> "${done_file}"
+
+            elif [[ -f "${fail_marker}" ]]; then
+                log "WARNING: Chunk ${cid} FAILED (job ${jid})"
+                echo "${cid}" >> "${fail_file}"
+                send_email "Chunk FAILED — ${RUN_ID}" \
+                    "Chunk ${cid} (job ${jid}) failed.\nLogs: ${log_dir}/${cid}.err\nScratch: ${run_scratch}/${cid}"
+                rm -rf "${run_scratch:?}/${cid}"
+
+            else
+                still_active+="${cid}"$'\t'"${jid}"$'\n'
+            fi
+        done < "${active_file}"
+        printf "%s" "${still_active}" > "${active_file}"
+    }
+
+    submit_chunk() {
+        local cid="$1" files_csv="$2"
+        local chunk_scratch="${run_scratch}/${cid}"
+        local chunk_data="${chunk_scratch}/data"
+        mkdir -p "${chunk_data}/field_retrieval"
+
+        # Copy bg01_Tomog.mat (common background, lives alongside sample files)
+        IFS=',' read -ra flist <<< "${files_csv}"
+        local dataset_dir
+        dataset_dir=$(dirname "${flist[0]}")
+        local bg_src="${dataset_dir}/bg01_Tomog.mat"
+        if [[ -f "${bg_src}" ]]; then
+            rsync -a "${bg_src}" "${chunk_data}/" \
+                || { log "ERROR: rsync failed for background ${bg_src}"; return 1; }
+            log "  Copied: bg01_Tomog.mat"
+        else
+            log "ERROR: background not found: ${bg_src}"
+            return 1
+        fi
+
+        # Copy sample files for this chunk
+        for fpath in "${flist[@]}"; do
+            rsync -a "${fpath}" "${chunk_data}/" \
+                || { log "ERROR: rsync failed for ${fpath}"; return 1; }
+        done
+        log "  Copied ${#flist[@]} sample files for ${cid}"
+
+        # Generate job script from template
+        local job_script="${jobs_dir}/${cid}.sh"
+        local job_name="tomo_${RUN_ID}_${cid}"
+        sed \
+            -e "s|__JOB_NAME__|${job_name}|g" \
+            -e "s|__LOG_DIR__|${log_dir}|g" \
+            -e "s|__EMAIL__|${EMAIL}|g" \
+            -e "s|__DATA_DIR__|${chunk_data}|g" \
+            -e "s|__CHUNK_DONE__|${chunk_scratch}/DONE|g" \
+            -e "s|__CHUNK_FAIL__|${chunk_scratch}/FAIL|g" \
+            -e "s|__REPO_DIR__|${REPO_DIR_VAR}|g" \
+            -e "s|__PARTITION__|${SLURM_PARTITION}|g" \
+            -e "s|__GRES__|${SLURM_GRES}|g" \
+            -e "s|__CPUS__|${SLURM_CPUS}|g" \
+            -e "s|__MEM__|${SLURM_MEM}|g" \
+            -e "s|__TIME__|${SLURM_TIME}|g" \
+            "${REPO_DIR_VAR}/bash_template.sh" > "${job_script}"
+        chmod +x "${job_script}"
+
+        local jid
+        jid=$(sbatch --parsable "${job_script}")
+        log "Submitted ${cid} → SLURM job ${jid}"
+        echo "${cid}"$'\t'"${jid}" >> "${active_file}"
+    }
+
+    # ── Main loop ─────────────────────────────────────────────────────────────
+    touch "${active_file}" "${done_file}" "${fail_file}"
+    declare -A submitted
+
+    while true; do
+        collect_finished
+
+        local total_chunks done_chunks fail_chunks
+        total_chunks=$(wc -l < "${chunks_file}")
+        done_chunks=$(wc -l < "${done_file}")
+        fail_chunks=$(wc -l < "${fail_file}")
+        local finished=$(( done_chunks + fail_chunks ))
+
+        log "Progress: ${done_chunks} done, ${fail_chunks} failed, ${finished}/${total_chunks} total"
+
+        if [[ "${finished}" -ge "${total_chunks}" ]]; then
+            break
+        fi
+
+        # Fill available job slots
+        local active
+        active=$(count_active)
+        local slots=$(( MAX_JOBS - active ))
+
+        if [[ "${slots}" -gt 0 ]]; then
+            while IFS=$'\t' read -r cid files_csv; do
+                [[ "${slots}" -le 0 ]] && break
+                [[ -n "${submitted[${cid}]+x}" ]] && continue
+                grep -qx "${cid}" "${done_file}" 2>/dev/null && { submitted["${cid}"]=1; continue; }
+                grep -qx "${cid}" "${fail_file}" 2>/dev/null && { submitted["${cid}"]=1; continue; }
+
+                log "Preparing ${cid} ..."
+                if submit_chunk "${cid}" "${files_csv}"; then
+                    submitted["${cid}"]=1
+                    slots=$(( slots - 1 ))
+                else
+                    log "WARNING: submit failed for ${cid}, will retry next poll"
+                fi
+            done < "${chunks_file}"
+        fi
+
+        sleep "${POLL_INTERVAL}"
+    done
+
+    # ── Final summary ─────────────────────────────────────────────────────────
+    done_chunks=$(wc -l < "${done_file}")
+    fail_chunks=$(wc -l < "${fail_file}")
+    log "=== All done: ${done_chunks} succeeded, ${fail_chunks} failed ==="
+
+    if [[ "${fail_chunks}" -gt 0 ]]; then
+        send_email "Completed with errors — ${RUN_ID}" \
+            "Processing complete.\nSucceeded: ${done_chunks}\nFailed: ${fail_chunks}\n\nFailed chunks:\n$(cat "${fail_file}")\n\nResults: ${dst_results}\nLogs: ${log_dir}"
+    else
+        send_email "Completed successfully — ${RUN_ID}" \
+            "All ${done_chunks} chunks processed successfully.\n\nResults: ${dst_results}\nLogs: ${log_dir}"
+    fi
+}
+
+# ── Sub-command: start ────────────────────────────────────────────────────────
 cmd_start() {
-    local email=""
-    local input_path=""
+    local email="" input_path=""
     local chunk_size="${FILES_PER_CHUNK}"
     local max_jobs="${MAX_PARALLEL_JOBS}"
 
@@ -180,50 +392,47 @@ cmd_start() {
     [[ -z "${email}" ]]      && die "--email is required"
     [[ -z "${input_path}" ]] && die "--path is required"
 
-    # Strip leading slash if present
     input_path="${input_path#/}"
-
     local src_path="${ZPE_RESULTS_MOUNT}/${input_path}"
-    [[ -d "${src_path}" ]] || die "Path not found on cluster mount: ${src_path}"
+    [[ -d "${src_path}" ]] || die "Path not found: ${src_path}"
 
-    # Verify there are sample files to process
     local nfiles
     nfiles=$(find "${src_path}" -name "sample*_Tomog.mat" | wc -l)
     [[ "${nfiles}" -gt 0 ]] || die "No sample*_Tomog.mat files found under ${src_path}"
     info "Found ${nfiles} sample files in ${src_path}"
 
-    # Create unique run ID
     local run_id
     run_id="tomo_$(date '+%Y%m%d_%H%M%S')"
     local run_scratch="${SCRATCH_ROOT}/${run_id}"
     mkdir -p "${run_scratch}/state" "${run_scratch}/logs" "${run_scratch}/jobs"
+
+    # Save orchestrator PID for --status / --cancel
+    local pid_file="${run_scratch}/state/orchestrator.pid"
 
     info "Run ID    : ${run_id}"
     info "Scratch   : ${run_scratch}"
     info "Chunk size: ${chunk_size} files"
     info "Max jobs  : ${max_jobs}"
 
-    # Patch orchestrator SBATCH headers with values from config
-    # (sed replaces the placeholder strings written into #SBATCH lines)
-    local orch_script="${run_scratch}/orchestrator_run.sh"
-    sed \
-        -e "s|ORCH_PARTITION_PLACEHOLDER|${ORCH_PARTITION}|g" \
-        -e "s|ORCH_TIME_PLACEHOLDER|${ORCH_TIME}|g" \
-        -e "s|ORCH_MEM_PLACEHOLDER|${ORCH_MEM}|g" \
-        "${SCRIPT_DIR}/orchestrator.sh" > "${orch_script}"
-    chmod +x "${orch_script}"
+    # Launch orchestrator as background process on login node
+    # Export all needed variables explicitly so the subshell has them
+    RUN_ID="${run_id}" \
+    INPUT_PATH="${input_path}" \
+    EMAIL="${email}" \
+    CHUNK_SIZE="${chunk_size}" \
+    MAX_JOBS="${max_jobs}" \
+    REPO_DIR_VAR="${SCRIPT_DIR}" \
+    nohup bash -c "
+        source '${SCRIPT_DIR}/config.sh'
+        source '${BASH_SOURCE[0]}'  # re-source tomo_process to get run_orchestrator()
+        echo \$\$ > '${pid_file}'
+        run_orchestrator
+    " >> "${run_scratch}/logs/orchestrator.log" 2>&1 &
 
-    # Submit orchestrator as a SLURM job, passing variables via --export
-    local orch_jid
-    orch_jid=$(sbatch --parsable \
-        --output="${run_scratch}/logs/orchestrator_slurm_%j.out" \
-        --error="${run_scratch}/logs/orchestrator_slurm_%j.err" \
-        --export=ALL,TOMO_REPO_DIR="${SCRIPT_DIR}",TOMO_INPUT_PATH="${input_path}",TOMO_EMAIL="${email}",TOMO_RUN_ID="${run_id}",FILES_PER_CHUNK="${chunk_size}",MAX_PARALLEL_JOBS="${max_jobs}" \
-        "${orch_script}")
+    local bg_pid=$!
+    echo "${bg_pid}" > "${pid_file}"
 
-    echo "${orch_jid}" > "${run_scratch}/state/orchestrator_job_id"
-
-    info "Orchestrator submitted → SLURM job ${orch_jid}"
+    info "Orchestrator running in background (pid ${bg_pid})"
     info ""
     info "You can safely disconnect. To check progress:"
     info "  tomo_process --status ${run_id}"
@@ -231,6 +440,9 @@ cmd_start() {
     info ""
     info "Results will appear at:"
     info "  ${ZPE_RESULTS_MOUNT}/${input_path}/_results/"
+    info ""
+    info "Full log:"
+    info "  ${run_scratch}/logs/orchestrator.log"
 }
 
 # ── Dispatch ──────────────────────────────────────────────────────────────────
