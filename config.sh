@@ -5,7 +5,7 @@
 # ── Cluster paths ────────────────────────────────────────────────────────────
 
 # Root of the read-only network mount on the cluster
-ZPE_RESULTS_MOUNT="/mnt/ZPE_results"
+ZPE_RESULTS_MOUNT="/mnt/ZPE_cluster_results"
 
 # Scratch space for staging data during processing
 SCRATCH_ROOT="/beegfs/home/ralajan/scratch/tomo_process"
