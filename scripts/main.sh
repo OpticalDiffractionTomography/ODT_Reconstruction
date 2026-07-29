@@ -11,7 +11,7 @@
 #SBATCH --time=24:00:00               # Max runtime (HH:MM:SS)
 #SBATCH --mem=128G                    # RAM: 16 workers each hold a full double tomogMap in flight
 #SBATCH --mail-type=all               # Email notifications for start/end/fail
-#SBATCH --mail-user=raghava.alajangi@mpzpm.mpg.de
+#SBATCH --mail-user=<your email address>
 
 # ---------------------------------------------------------------------------
 # Usage:
