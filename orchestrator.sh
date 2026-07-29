@@ -1,297 +1,222 @@
 #!/bin/bash
-# orchestrator.sh — runs as a SLURM job; manages the full copy→process→collect loop.
-# Submitted by `tomo_process`; never run directly.
+# orchestrator.sh — long-running loop on the login node.
+# Launched by tomo_process via nohup; never run directly.
 #
-# Arguments (passed via --export or environment, set by tomo_process):
-#   TOMO_INPUT_PATH   path under ZPE_RESULTS_MOUNT to read sample files from
-#   TOMO_EMAIL        user email
-#   TOMO_RUN_ID       unique run identifier (set by tomo_process)
-
-#SBATCH -J tomo_orchestrator
-#SBATCH -o /tmp/tomo_orch_%j.out
-#SBATCH -e /tmp/tomo_orch_%j.err
-#SBATCH -D .
-#SBATCH --partition=ORCH_PARTITION_PLACEHOLDER
-#SBATCH --nodes=1
-#SBATCH --ntasks=1
-#SBATCH --cpus-per-task=1
-#SBATCH --time=ORCH_TIME_PLACEHOLDER
-#SBATCH --mem=ORCH_MEM_PLACEHOLDER
-#SBATCH --mail-type=NONE
+# Required environment variables (set by tomo_process via export):
+#   TOMO_RUN_ID, TOMO_INPUT_PATH, TOMO_EMAIL,
+#   TOMO_CHUNK_SIZE, TOMO_MAX_JOBS, TOMO_REPO_DIR,
+#   TOMO_SCRATCH_ROOT, TOMO_ZPE_MOUNT,
+#   TOMO_POLL_INTERVAL, TOMO_SLURM_PARTITION, TOMO_SLURM_GRES,
+#   TOMO_SLURM_CPUS, TOMO_SLURM_MEM, TOMO_SLURM_TIME
 
 set -euo pipefail
 
-# ── Source config ─────────────────────────────────────────────────────────────
-# REPO_DIR is injected via --export by tomo_process; BASH_SOURCE[0] resolves
-# to the SLURM spool copy and cannot be used to locate the repo.
-: "${TOMO_REPO_DIR:?TOMO_REPO_DIR not set — was this submitted by tomo_process?}"
-REPO_DIR="${TOMO_REPO_DIR}"
-# shellcheck source=config.sh
-source "${REPO_DIR}/config.sh"
-
-# ── Validate environment ──────────────────────────────────────────────────────
-: "${TOMO_INPUT_PATH:?TOMO_INPUT_PATH not set}"
-: "${TOMO_EMAIL:?TOMO_EMAIL not set}"
-: "${TOMO_RUN_ID:?TOMO_RUN_ID not set}"
-
-# ── Directories ───────────────────────────────────────────────────────────────
-RUN_SCRATCH="${SCRATCH_ROOT}/${TOMO_RUN_ID}"
+# ── Paths ─────────────────────────────────────────────────────────────────────
+RUN_SCRATCH="${TOMO_SCRATCH_ROOT}/${TOMO_RUN_ID}"
 STATE_DIR="${RUN_SCRATCH}/state"
 LOG_DIR="${RUN_SCRATCH}/logs"
-JOBS_DIR="${RUN_SCRATCH}/jobs"       # generated job scripts
+JOBS_DIR="${RUN_SCRATCH}/jobs"
+ORCH_LOG="${LOG_DIR}/orchestrator.log"
 
-SRC_MOUNT="${ZPE_RESULTS_MOUNT}/${TOMO_INPUT_PATH}"
+SRC_MOUNT="${TOMO_ZPE_MOUNT}/${TOMO_INPUT_PATH}"
 DST_RESULTS="${SRC_MOUNT}/_results"
 
-mkdir -p "${STATE_DIR}" "${LOG_DIR}" "${JOBS_DIR}"
-
-ORCH_LOG="${LOG_DIR}/orchestrator.log"
+CHUNKS_FILE="${STATE_DIR}/chunks.txt"
+ACTIVE_FILE="${STATE_DIR}/active_jobs.txt"
+DONE_FILE="${STATE_DIR}/done_chunks.txt"
+FAIL_FILE="${STATE_DIR}/failed_chunks.txt"
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "${ORCH_LOG}"; }
 
 send_email() {
-    local subject="$1"
-    local body="$2"
-    echo "${body}" | mail -s "[tomo_process] ${subject}" "${TOMO_EMAIL}" 2>/dev/null || true
+    local subject="$1" body="$2"
+    echo -e "${body}" | mail -s "[tomo_process] ${subject}" "${TOMO_EMAIL}" 2>/dev/null || true
 }
 
-# ── Discover all sample MAT files ─────────────────────────────────────────────
-log "=== tomo_process orchestrator start ==="
-log "Run ID    : ${TOMO_RUN_ID}"
-log "Input     : ${SRC_MOUNT}"
-log "Results   : ${DST_RESULTS}"
-log "Scratch   : ${RUN_SCRATCH}"
+log "=== Orchestrator start (pid $$) ==="
+log "Run ID  : ${TOMO_RUN_ID}"
+log "Input   : ${SRC_MOUNT}"
+log "Results : ${DST_RESULTS}"
+log "Scratch : ${RUN_SCRATCH}"
 
-if [[ ! -d "${SRC_MOUNT}" ]]; then
-    log "ERROR: Source path not found: ${SRC_MOUNT}"
-    send_email "FAILED — ${TOMO_RUN_ID}" \
-        "Source path not found: ${SRC_MOUNT}\nCheck that /mnt/ZPE_results is mounted."
+# ── Discover and chunk files ──────────────────────────────────────────────────
+find "${SRC_MOUNT}" -name "sample*_Tomog.mat" | sort > "${STATE_DIR}/pending_files.txt"
+TOTAL=$(wc -l < "${STATE_DIR}/pending_files.txt")
+log "Found ${TOTAL} sample files"
+
+if [[ "${TOTAL}" -eq 0 ]]; then
+    log "ERROR: no sample*_Tomog.mat files found under ${SRC_MOUNT}"
+    send_email "FAILED — ${TOMO_RUN_ID}" "No sample files found under ${SRC_MOUNT}"
     exit 1
 fi
 
-# Collect all sample*_Tomog.mat files, sorted
-PENDING_FILE="${STATE_DIR}/pending_files.txt"
-CHUNKS_FILE="${STATE_DIR}/chunks.txt"   # format: chunk_id<TAB>file1,file2,...
-ACTIVE_FILE="${STATE_DIR}/active_jobs.txt"   # format: chunk_id<TAB>slurm_job_id
-DONE_FILE="${STATE_DIR}/done_chunks.txt"
-FAIL_FILE="${STATE_DIR}/failed_chunks.txt"
-
-if [[ ! -f "${PENDING_FILE}" ]]; then
-    find "${SRC_MOUNT}" -name "sample*_Tomog.mat" | sort > "${PENDING_FILE}"
-    TOTAL=$(wc -l < "${PENDING_FILE}")
-    log "Found ${TOTAL} sample MAT files"
-
-    if [[ "${TOTAL}" -eq 0 ]]; then
-        log "ERROR: No sample*_Tomog.mat files found under ${SRC_MOUNT}"
-        send_email "FAILED — ${TOMO_RUN_ID}" \
-            "No sample*_Tomog.mat files found under ${SRC_MOUNT}"
-        exit 1
+chunk_idx=0
+chunk_files=()
+while IFS= read -r fpath; do
+    chunk_files+=("${fpath}")
+    if [[ ${#chunk_files[@]} -ge ${TOMO_CHUNK_SIZE} ]]; then
+        cid=$(printf "chunk%04d" ${chunk_idx})
+        echo "${cid}"$'\t'"$(IFS=','; echo "${chunk_files[*]}")" >> "${CHUNKS_FILE}"
+        chunk_idx=$(( chunk_idx + 1 ))
+        chunk_files=()
     fi
-
-    # Auto-size: aim for FILES_PER_CHUNK files per job; split into chunks
-    chunk_idx=0
-    chunk_files=()
-    while IFS= read -r fpath; do
-        chunk_files+=("${fpath}")
-        if [[ ${#chunk_files[@]} -ge ${FILES_PER_CHUNK} ]]; then
-            chunk_id=$(printf "chunk%04d" ${chunk_idx})
-            echo "${chunk_id}"$'\t'"$(IFS=','; echo "${chunk_files[*]}")" >> "${CHUNKS_FILE}"
-            chunk_idx=$(( chunk_idx + 1 ))
-            chunk_files=()
-        fi
-    done < "${PENDING_FILE}"
-    # Remaining files (last partial chunk)
-    if [[ ${#chunk_files[@]} -gt 0 ]]; then
-        chunk_id=$(printf "chunk%04d" ${chunk_idx})
-        echo "${chunk_id}"$'\t'"$(IFS=','; echo "${chunk_files[*]}")" >> "${CHUNKS_FILE}"
-    fi
-
-    NCHUNKS=$(wc -l < "${CHUNKS_FILE}")
-    log "Split into ${NCHUNKS} chunks of up to ${FILES_PER_CHUNK} files each"
+done < "${STATE_DIR}/pending_files.txt"
+if [[ ${#chunk_files[@]} -gt 0 ]]; then
+    cid=$(printf "chunk%04d" ${chunk_idx})
+    echo "${cid}"$'\t'"$(IFS=','; echo "${chunk_files[*]}")" >> "${CHUNKS_FILE}"
 fi
+
+NCHUNKS=$(wc -l < "${CHUNKS_FILE}")
+log "Split into ${NCHUNKS} chunks of up to ${TOMO_CHUNK_SIZE} files"
 
 touch "${ACTIVE_FILE}" "${DONE_FILE}" "${FAIL_FILE}"
 
 send_email "Started — ${TOMO_RUN_ID}" \
-    "Processing started.\nInput : ${SRC_MOUNT}\nChunks: $(wc -l < "${CHUNKS_FILE}")\nMax parallel jobs: ${MAX_PARALLEL_JOBS}"
+    "Processing started.\nInput : ${SRC_MOUNT}\nChunks: ${NCHUNKS}\nMax parallel jobs: ${TOMO_MAX_JOBS}"
 
-# ── Helper: count active jobs still in SLURM queue ───────────────────────────
-count_active_jobs() {
-    local count=0
-    while IFS=$'\t' read -r cid jid; do
-        if squeue -j "${jid}" -h &>/dev/null; then
-            count=$(( count + 1 ))
-        fi
+# ── Helpers ───────────────────────────────────────────────────────────────────
+count_active() {
+    local n=0
+    [[ -s "${ACTIVE_FILE}" ]] || { echo 0; return; }
+    while IFS=$'\t' read -r _cid jid; do
+        squeue -j "${jid}" -h &>/dev/null 2>&1 && n=$(( n + 1 ))
     done < "${ACTIVE_FILE}"
-    echo "${count}"
+    echo "${n}"
 }
 
-# ── Helper: collect finished jobs ─────────────────────────────────────────────
 collect_finished() {
-    local new_active=""
+    [[ -s "${ACTIVE_FILE}" ]] || return
+    local still_active=""
     while IFS=$'\t' read -r cid jid; do
         local done_marker="${RUN_SCRATCH}/${cid}/DONE"
         local fail_marker="${RUN_SCRATCH}/${cid}/FAIL"
 
         if [[ -f "${done_marker}" ]]; then
-            log "Chunk ${cid} finished successfully (job ${jid})"
-            echo "${cid}" >> "${DONE_FILE}"
-            # Remove scratch data for this chunk
+            log "Chunk ${cid} done — copying results to ${DST_RESULTS}/${cid}/"
+            mkdir -p "${DST_RESULTS}/${cid}"
+            rsync -a "${RUN_SCRATCH}/${cid}/data/field_retrieval/" \
+                "${DST_RESULTS}/${cid}/field_retrieval/" \
+                && log "Results copied for ${cid}" \
+                || log "WARNING: rsync to /mnt failed for ${cid}"
             rm -rf "${RUN_SCRATCH:?}/${cid}"
-            log "Cleaned scratch for ${cid}"
+            echo "${cid}" >> "${DONE_FILE}"
 
         elif [[ -f "${fail_marker}" ]]; then
-            log "WARNING: Chunk ${cid} FAILED (job ${jid}) — kept in scratch for inspection"
+            log "WARNING: Chunk ${cid} FAILED (job ${jid})"
             echo "${cid}" >> "${FAIL_FILE}"
             send_email "Chunk FAILED — ${TOMO_RUN_ID}" \
-                "Chunk ${cid} (SLURM job ${jid}) failed.\nLogs: ${LOG_DIR}/${cid}_*.err\nScratch data kept at: ${RUN_SCRATCH}/${cid}"
+                "Chunk ${cid} (job ${jid}) failed.\nLogs: ${LOG_DIR}/${cid}.err\nScratch kept at: ${RUN_SCRATCH}/${cid}"
+            rm -rf "${RUN_SCRATCH:?}/${cid}"
 
         else
-            # Still running or pending
-            new_active+="${cid}"$'\t'"${jid}"$'\n'
+            still_active+="${cid}"$'\t'"${jid}"$'\n'
         fi
     done < "${ACTIVE_FILE}"
-    printf "%s" "${new_active}" > "${ACTIVE_FILE}"
+    printf "%s" "${still_active}" > "${ACTIVE_FILE}"
 }
 
-# ── Helper: submit one chunk ──────────────────────────────────────────────────
 submit_chunk() {
-    local chunk_id="$1"
-    local files_csv="$2"   # comma-separated list of full paths
-
-    local chunk_scratch="${RUN_SCRATCH}/${chunk_id}"
+    local cid="$1" files_csv="$2"
+    local chunk_scratch="${RUN_SCRATCH}/${cid}"
     local chunk_data="${chunk_scratch}/data"
-    local chunk_results="${chunk_scratch}/results"
-    mkdir -p "${chunk_data}/field_retrieval" "${chunk_results}"
+    mkdir -p "${chunk_data}/field_retrieval"
 
-    log "Copying files for ${chunk_id} ..."
+    # Copy common background file (lives alongside sample files, login node has /mnt access)
     IFS=',' read -ra flist <<< "${files_csv}"
-
-    # bg01_Tomog.mat is a single common background shared across the whole dataset.
-    # It lives in the same directory as the sample files; copy it once per chunk.
     local dataset_dir
     dataset_dir=$(dirname "${flist[0]}")
     local bg_src="${dataset_dir}/bg01_Tomog.mat"
     if [[ -f "${bg_src}" ]]; then
         rsync -a "${bg_src}" "${chunk_data}/" \
-            || { log "rsync failed for background ${bg_src}"; return 1; }
-        log "Copied background: bg01_Tomog.mat"
+            || { log "ERROR: rsync failed for background ${bg_src}"; return 1; }
+        log "  Copied: bg01_Tomog.mat"
     else
-        log "ERROR: background file not found: ${bg_src}"
+        log "ERROR: background not found: ${bg_src}"
         return 1
     fi
 
-    # Copy the sample files for this chunk
+    # Copy sample files for this chunk
     for fpath in "${flist[@]}"; do
         rsync -a "${fpath}" "${chunk_data}/" \
-            || { log "rsync copy failed for ${fpath}"; return 1; }
+            || { log "ERROR: rsync failed for ${fpath}"; return 1; }
     done
-
-    # Result destination mirrors the relative path inside ZPE_results
-    local rel_path="${TOMO_INPUT_PATH}"
-    local result_dest="${DST_RESULTS}/${chunk_id}"
+    log "  Copied ${#flist[@]} sample files for ${cid}"
 
     # Generate job script from template
-    local job_script="${JOBS_DIR}/${chunk_id}.sh"
-    local job_name="tomo_${TOMO_RUN_ID}_${chunk_id}"
-
+    local job_script="${JOBS_DIR}/${cid}.sh"
+    local job_name="tomo_${TOMO_RUN_ID}_${cid}"
     sed \
         -e "s|__JOB_NAME__|${job_name}|g" \
         -e "s|__LOG_DIR__|${LOG_DIR}|g" \
         -e "s|__EMAIL__|${TOMO_EMAIL}|g" \
         -e "s|__DATA_DIR__|${chunk_data}|g" \
-        -e "s|__RESULT_DIR__|${result_dest}|g" \
         -e "s|__CHUNK_DONE__|${chunk_scratch}/DONE|g" \
         -e "s|__CHUNK_FAIL__|${chunk_scratch}/FAIL|g" \
-        -e "s|__REPO_DIR__|${REPO_DIR}|g" \
-        -e "s|__PARTITION__|${SLURM_PARTITION}|g" \
-        -e "s|__GRES__|${SLURM_GRES}|g" \
-        -e "s|__CPUS__|${SLURM_CPUS}|g" \
-        -e "s|__MEM__|${SLURM_MEM}|g" \
-        -e "s|__TIME__|${SLURM_TIME}|g" \
-        "${REPO_DIR}/bash_template.sh" > "${job_script}"
-
+        -e "s|__REPO_DIR__|${TOMO_REPO_DIR}|g" \
+        -e "s|__PARTITION__|${TOMO_SLURM_PARTITION}|g" \
+        -e "s|__GRES__|${TOMO_SLURM_GRES}|g" \
+        -e "s|__CPUS__|${TOMO_SLURM_CPUS}|g" \
+        -e "s|__MEM__|${TOMO_SLURM_MEM}|g" \
+        -e "s|__TIME__|${TOMO_SLURM_TIME}|g" \
+        "${TOMO_REPO_DIR}/bash_template.sh" > "${job_script}"
     chmod +x "${job_script}"
 
     local jid
     jid=$(sbatch --parsable "${job_script}")
-    log "Submitted ${chunk_id} → SLURM job ${jid}"
-    echo "${chunk_id}"$'\t'"${jid}" >> "${ACTIVE_FILE}"
+    log "Submitted ${cid} → SLURM job ${jid}"
+    echo "${cid}"$'\t'"${jid}" >> "${ACTIVE_FILE}"
 }
 
 # ── Main loop ─────────────────────────────────────────────────────────────────
-# Read all chunks into an array; track which ones have been submitted
-declare -A submitted_chunks
-while IFS=$'\t' read -r cid _; do
-    submitted_chunks["${cid}"]=0
-done < "${DONE_FILE}"
-# Also mark previously active as submitted (resume case)
-while IFS=$'\t' read -r cid _; do
-    submitted_chunks["${cid}"]=1
-done < "${ACTIVE_FILE}"
+declare -A submitted
 
 while true; do
     collect_finished
 
-    # Check if everything is done
-    TOTAL_CHUNKS=$(wc -l < "${CHUNKS_FILE}")
-    DONE_CHUNKS=$(wc -l < "${DONE_FILE}")
-    FAIL_CHUNKS=$(wc -l < "${FAIL_FILE}")
-    FINISHED=$(( DONE_CHUNKS + FAIL_CHUNKS ))
+    local_total=$(wc -l < "${CHUNKS_FILE}")
+    local_done=$(wc -l < "${DONE_FILE}")
+    local_fail=$(wc -l < "${FAIL_FILE}")
+    local_finished=$(( local_done + local_fail ))
 
-    log "Progress: ${DONE_CHUNKS} done, ${FAIL_CHUNKS} failed, ${FINISHED}/${TOTAL_CHUNKS} finished"
+    log "Progress: ${local_done} done, ${local_fail} failed, ${local_finished}/${local_total} total"
 
-    if [[ "${FINISHED}" -ge "${TOTAL_CHUNKS}" ]]; then
+    if [[ "${local_finished}" -ge "${local_total}" ]]; then
         break
     fi
 
-    # Submit new chunks up to MAX_PARALLEL_JOBS
-    ACTIVE=$(count_active_jobs)
-    SLOTS=$(( MAX_PARALLEL_JOBS - ACTIVE ))
+    active=$(count_active)
+    slots=$(( TOMO_MAX_JOBS - active ))
 
-    if [[ "${SLOTS}" -gt 0 ]]; then
+    if [[ "${slots}" -gt 0 ]]; then
         while IFS=$'\t' read -r cid files_csv; do
-            [[ "${SLOTS}" -le 0 ]] && break
+            [[ "${slots}" -le 0 ]] && break
+            [[ -n "${submitted[${cid}]+x}" ]] && continue
+            grep -qx "${cid}" "${DONE_FILE}" 2>/dev/null && { submitted["${cid}"]=1; continue; }
+            grep -qx "${cid}" "${FAIL_FILE}" 2>/dev/null && { submitted["${cid}"]=1; continue; }
 
-            # Skip already submitted or failed chunks
-            if [[ -n "${submitted_chunks[${cid}]+x}" ]]; then
-                continue
+            log "Preparing ${cid} ..."
+            if submit_chunk "${cid}" "${files_csv}"; then
+                submitted["${cid}"]=1
+                slots=$(( slots - 1 ))
+            else
+                log "WARNING: submit failed for ${cid}, will retry next poll"
             fi
-            if grep -qx "${cid}" "${DONE_FILE}" 2>/dev/null; then
-                submitted_chunks["${cid}"]=1
-                continue
-            fi
-            if grep -qx "${cid}" "${FAIL_FILE}" 2>/dev/null; then
-                submitted_chunks["${cid}"]=1
-                continue
-            fi
-
-            submit_chunk "${cid}" "${files_csv}" \
-                && submitted_chunks["${cid}"]=1 \
-                || log "WARNING: submit_chunk failed for ${cid}, will retry next poll"
-
-            SLOTS=$(( SLOTS - 1 ))
         done < "${CHUNKS_FILE}"
     fi
 
-    log "Sleeping ${POLL_INTERVAL}s ..."
-    sleep "${POLL_INTERVAL}"
+    sleep "${TOMO_POLL_INTERVAL}"
 done
 
 # ── Final summary ─────────────────────────────────────────────────────────────
-DONE_CHUNKS=$(wc -l < "${DONE_FILE}")
-FAIL_CHUNKS=$(wc -l < "${FAIL_FILE}")
+local_done=$(wc -l < "${DONE_FILE}")
+local_fail=$(wc -l < "${FAIL_FILE}")
+log "=== All done: ${local_done} succeeded, ${local_fail} failed ==="
 
-log "=== All chunks processed: ${DONE_CHUNKS} succeeded, ${FAIL_CHUNKS} failed ==="
-
-if [[ "${FAIL_CHUNKS}" -gt 0 ]]; then
-    FAILED_LIST=$(cat "${FAIL_FILE}")
+if [[ "${local_fail}" -gt 0 ]]; then
     send_email "Completed with errors — ${TOMO_RUN_ID}" \
-        "Processing complete.\n\nSucceeded: ${DONE_CHUNKS}\nFailed   : ${FAIL_CHUNKS}\n\nFailed chunks:\n${FAILED_LIST}\n\nResults at: ${DST_RESULTS}\nLogs      : ${LOG_DIR}"
+        "Processing complete.\nSucceeded: ${local_done}\nFailed: ${local_fail}\n\nFailed chunks:\n$(cat "${FAIL_FILE}")\n\nResults: ${DST_RESULTS}\nLogs: ${LOG_DIR}"
 else
     send_email "Completed successfully — ${TOMO_RUN_ID}" \
-        "All ${DONE_CHUNKS} chunks processed successfully.\n\nResults at: ${DST_RESULTS}\nLogs      : ${LOG_DIR}"
+        "All ${local_done} chunks processed successfully.\n\nResults: ${DST_RESULTS}\nLogs: ${LOG_DIR}"
 fi
-
-log "Orchestrator done."
