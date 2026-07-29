@@ -10,7 +10,6 @@
 #   TOMO_SLURM_CPUS, TOMO_SLURM_MEM, TOMO_SLURM_TIME
 
 set -euo pipefail
-trap 'echo "[$(date +%Y-%m-%d\ %H:%M:%S)] FATAL: script exited unexpectedly at line ${LINENO} (exit code $?)" >> "${ORCH_LOG:-/tmp/tomo_orch_crash.log}"' EXIT
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 RUN_SCRATCH="${TOMO_SCRATCH_ROOT}/${TOMO_RUN_ID}"
@@ -101,7 +100,7 @@ send_email "Started — ${TOMO_RUN_ID}" \
 # ── Helpers ───────────────────────────────────────────────────────────────────
 count_active() {
     local n=0
-    [[ -s "${ACTIVE_FILE}" ]] || { echo 0; return; }
+    [[ -s "${ACTIVE_FILE}" ]] || { echo 0; return 0; }
     while IFS=$'\t' read -r _cid jid; do
         squeue -j "${jid}" -h &>/dev/null 2>&1 && n=$(( n + 1 ))
     done < "${ACTIVE_FILE}"
@@ -109,7 +108,7 @@ count_active() {
 }
 
 collect_finished() {
-    [[ -s "${ACTIVE_FILE}" ]] || return
+    [[ -s "${ACTIVE_FILE}" ]] || return 0
     local still_active=""
     while IFS=$'\t' read -r cid jid; do
         local done_marker="${RUN_SCRATCH}/${cid}/DONE"
