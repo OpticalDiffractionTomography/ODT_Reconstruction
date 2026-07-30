@@ -4,15 +4,20 @@
 
 # ── Cluster paths ────────────────────────────────────────────────────────────
 
-# Root of the read-only network mount on the cluster
-GUCK_DIVISION_2_MOUNT="/mnt/guck_division2"    # read-only: input data
-ZPE_RESULTS_MOUNT="/mnt/ZPE_cluster_results"   # writable: results output
+# Root of the read-only network mount where input data lives.
+# Set to the path where your raw tomogram directories are mounted on the cluster.
+DATA_MOUNT="/mnt/data"                         # read-only: input data
 
-# Scratch space for staging data during processing
-SCRATCH_ROOT="/beegfs/home/ralajan/scratch/tomo_process"
+# Writable mount where processed results will be written.
+# Set to a path accessible from the login node (compute nodes do not need it).
+RESULTS_MOUNT="/mnt/results"                   # writable: results output
 
-# Absolute path to this repository on the cluster
-REPO_DIR="/beegfs/home/ralajan/matlab/field_tomogram_reconstruction"
+# Scratch space on fast cluster storage for staging data during processing.
+# Must be accessible from both the login node and compute nodes.
+SCRATCH_ROOT="${HOME}/scratch/tomo_process"
+
+# Absolute path to this repository on the cluster (auto-detected; override if needed)
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || echo "")"
 
 # ── Job limits ───────────────────────────────────────────────────────────────
 

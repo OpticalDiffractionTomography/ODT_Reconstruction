@@ -7,7 +7,7 @@
 #   __JOB_NAME__      unique name for this chunk  (e.g. tomo_20260728_chunk003)
 #   __LOG_DIR__       directory for out/err logs
 #   __EMAIL__         user email for SLURM notifications
-#   __DATA_DIR__      chunk staging dir on scratch  (/beegfs/.../scratch/<run>/<chunk>/data)
+#   __DATA_DIR__      chunk staging dir on scratch  ($SCRATCH_ROOT/<run>/<chunk>/data)
 #   __CHUNK_DONE__    touch-file path; orchestrator watches for this
 #   __CHUNK_FAIL__    touch-file path written on failure
 #   __PARTITION__     SLURM partition
@@ -74,6 +74,6 @@ run_stage field_Retrieval.m
 run_stage tomogram_Reconstruction.m
 
 # Signal success — the login-node orchestrator will rsync results from
-# ${DATA_DIR}/field_retrieval/ back to /mnt/guck_division2.
+# ${DATA_DIR}/field_retrieval/ back to the results mount.
 touch "${CHUNK_DONE}"
 log "=== Job complete: __JOB_NAME__ ==="

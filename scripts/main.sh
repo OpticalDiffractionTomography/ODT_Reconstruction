@@ -15,7 +15,7 @@
 
 # ---------------------------------------------------------------------------
 # Usage:
-#   sbatch main.sh --data_dir /beegfs/home/ralajan/matlab/20260203_Cecile_MDCK
+#   sbatch main.sh --data_dir /path/to/experiment_data
 #
 # Arguments:
 #   --data_dir <path>   Experiment folder containing batch*/ subdirectories

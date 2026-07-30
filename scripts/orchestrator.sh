@@ -63,7 +63,7 @@ log "Scratch : ${RUN_SCRATCH}"
 
 # ── Discover and chunk files (skipped on resume — chunks.txt already exists) ──
 # chunks.txt format: chunk_id <TAB> src_dir <TAB> file1,file2,...
-# State files on /beegfs survive login node reboots, so a resumed orchestrator
+# State files on scratch survive login node reboots, so a resumed orchestrator
 # simply re-adopts active jobs and continues from where it left off.
 
 if [[ -f "${CHUNKS_FILE}" ]]; then

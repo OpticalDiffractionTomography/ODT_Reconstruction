@@ -5,7 +5,7 @@
 # Compute nodes never touch the network mount.
 #
 # Usage:
-#   tomo_process --email <email> --path <relative_path_under_guck_division2>
+#   tomo_process --email <email> --path <relative_path_under_data_mount>
 #   tomo_process --resume <run_id>
 #   tomo_process --status <run_id>
 #   tomo_process --list
@@ -21,7 +21,7 @@ source "${SCRIPT_DIR}/config.sh"
 usage() {
     cat <<EOF
 Usage:
-  tomo_process --email <email> --path <relative_path_under_guck_division2>
+  tomo_process --email <email> --path <relative_path_under_data_mount>
                [--max-jobs <N>]  [--mins-per-sample <N>]
 
   tomo_process --status <run_id>   Show status of a running/finished run
@@ -30,18 +30,18 @@ Usage:
   tomo_process --cancel <run_id>   Cancel an active run
 
 Examples:
-  tomo_process --email me@lab.de --path "Raghava/20260715_RPE"
+  tomo_process --email me@lab.de --path "ProjectA/20260715_experiment"
   tomo_process --status tomo_20260729_143201
   tomo_process --list
 
 Notes:
-  - <path> is relative to ${GUCK_DIVISION_2_MOUNT}/
+  - <path> is relative to ${DATA_MOUNT}/
   - <path> can contain multiple subdirectories; all sample*_Tomog.mat files
     found recursively will be processed.
   - Chunk size is auto-derived: floor(walltime / --mins-per-sample).
     Default ${SLURM_TIME} walltime / ${MINS_PER_SAMPLE} min = $(( $(echo ${SLURM_TIME} | awk -F: '{print $1*60+$2}') / MINS_PER_SAMPLE )) samples per job.
   - Override per-sample estimate if your data is faster/slower: --mins-per-sample 10
-  - Results: ${ZPE_RESULTS_MOUNT}/<rel_path>/field_retrieval_zpe_results/
+  - Results: ${RESULTS_MOUNT}/<rel_path>/field_retrieval_zpe_results/
   - Scratch : ${SCRATCH_ROOT}/<run_id>/
   - The orchestrator runs as a nohup background process on the login node.
 EOF
@@ -184,7 +184,7 @@ cmd_start() {
 
     input_path="${input_path//\\//}"   # backslash → forward slash
     input_path="${input_path#/}"       # strip any leading slash
-    local src_path="${GUCK_DIVISION_2_MOUNT}/${input_path}"
+    local src_path="${DATA_MOUNT}/${input_path}"
     [[ -d "${src_path}" ]] || die "Path not found: ${src_path}"
 
     local nfiles
@@ -208,8 +208,8 @@ TOMO_MAX_JOBS="${max_jobs}"
 TOMO_MINS_PER_SAMPLE="${mins_per_sample}"
 TOMO_REPO_DIR="${SCRIPT_DIR}"
 TOMO_SCRATCH_ROOT="${SCRATCH_ROOT}"
-TOMO_DATA_MOUNT="${GUCK_DIVISION_2_MOUNT}"
-TOMO_RESULTS_MOUNT="${ZPE_RESULTS_MOUNT}"
+TOMO_DATA_MOUNT="${DATA_MOUNT}"
+TOMO_RESULTS_MOUNT="${RESULTS_MOUNT}"
 TOMO_POLL_INTERVAL="${POLL_INTERVAL}"
 TOMO_SLURM_PARTITION="${SLURM_PARTITION}"
 TOMO_SLURM_GRES="${SLURM_GRES}"
@@ -233,8 +233,8 @@ EOF
         TOMO_MINS_PER_SAMPLE="${mins_per_sample}" \
         TOMO_REPO_DIR="${SCRIPT_DIR}" \
         TOMO_SCRATCH_ROOT="${SCRATCH_ROOT}" \
-        TOMO_DATA_MOUNT="${GUCK_DIVISION_2_MOUNT}" \
-        TOMO_RESULTS_MOUNT="${ZPE_RESULTS_MOUNT}" \
+        TOMO_DATA_MOUNT="${DATA_MOUNT}" \
+        TOMO_RESULTS_MOUNT="${RESULTS_MOUNT}" \
         TOMO_POLL_INTERVAL="${POLL_INTERVAL}" \
         TOMO_SLURM_PARTITION="${SLURM_PARTITION}" \
         TOMO_SLURM_GRES="${SLURM_GRES}" \
@@ -254,7 +254,7 @@ EOF
     info "  tomo_process --list"
     info ""
     info "Results will appear at:"
-    info "  ${GUCK_DIVISION_2_MOUNT}/${input_path}/_results/"
+    info "  ${DATA_MOUNT}/${input_path}/_results/"
     info ""
     info "Full log:"
     info "  ${run_scratch}/logs/orchestrator.log"

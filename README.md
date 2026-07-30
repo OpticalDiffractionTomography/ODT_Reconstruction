@@ -1,6 +1,6 @@
-# field_tomogram_reconstruction
+# ODT_Reconstruction
 
-Automated pipeline for **Optical Diffraction Tomography (ODT)** — reconstructing 3D refractive index maps of biological samples from interferometric holographic measurements on the ZPE HPC cluster.
+Automated pipeline for **Optical Diffraction Tomography (ODT)** — reconstructing 3D refractive index maps of biological samples from interferometric holographic measurements on an HPC cluster.
 
 ---
 
@@ -10,10 +10,13 @@ Automated pipeline for **Optical Diffraction Tomography (ODT)** — reconstructi
 
 ```bash
 # 1. Clone onto the cluster
-git clone <repo_url> /beegfs/home/ralajan/matlab/field_tomogram_reconstruction
-cd /beegfs/home/ralajan/matlab/field_tomogram_reconstruction
+git clone https://github.com/OpticalDiffractionTomography/ODT_Reconstruction.git
+cd ODT_Reconstruction
 
-# 2. Install the CLI tool
+# 2. Configure paths for your cluster (edit before installing)
+nano config.sh
+
+# 3. Install the CLI tool
 bash install.sh
 source ~/.bashrc
 ```
@@ -21,23 +24,23 @@ source ~/.bashrc
 <details>
 <summary>What install.sh does</summary>
 
-- Creates the scratch directory (`/beegfs/home/ralajan/scratch/tomo_process/`)
+- Creates the scratch directory (`$SCRATCH_ROOT`, set in `config.sh`)
 - Symlinks `tomo_process` into `~/.local/bin` so it's available system-wide
 - Adds `~/.local/bin` to your `PATH` in `~/.bashrc` if not already there
-- Verifies that `sbatch` and the network mount are accessible
+- Verifies that `sbatch` and the data mount are accessible
 
 </details>
 
 <details>
 <summary>Configuring cluster settings (config.sh)</summary>
 
-All tunable parameters live in `config.sh`. Edit once if your cluster differs:
+All tunable parameters live in `config.sh`. **Edit this file before running `install.sh`** to match your cluster's paths and resources:
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `GUCK_DIVISION_2_MOUNT` | `/mnt/guck_division2` | Read-only input data mount |
-| `ZPE_RESULTS_MOUNT` | `/mnt/ZPE_cluster_results` | Writable results mount |
-| `SCRATCH_ROOT` | `/beegfs/home/ralajan/scratch/tomo_process` | Staging area for job data |
+| `DATA_MOUNT` | `/mnt/data` | Path where input data is mounted (read-only) |
+| `RESULTS_MOUNT` | `/mnt/results` | Path where results will be written (writable) |
+| `SCRATCH_ROOT` | `$HOME/scratch/tomo_process` | Fast scratch storage for job staging |
 | `MAX_PARALLEL_JOBS` | `5` | Max simultaneous SLURM jobs |
 | `SLURM_TIME` | `20:00:00` | Walltime per job |
 | `MINS_PER_SAMPLE` | `15` | Estimated minutes per sample file (sets chunk size) |
@@ -54,13 +57,13 @@ All tunable parameters live in `config.sh`. Edit once if your cluster differs:
 tomo_process --email "you@institute.de" --path "Members/YourName/experiment_folder"
 ```
 
-- `--path` is relative to `/mnt/guck_division2/`
+- `--path` is relative to `$DATA_MOUNT/` (as set in `config.sh`)
 - The folder can contain **multiple subdirectories** — all `sample*_Tomog.mat` files found recursively will be processed
 - You can **disconnect immediately** after running this command — processing continues on the cluster
 
 **Results appear at:**
 ```
-/mnt/ZPE_cluster_results/Members/YourName/experiment_folder/<subdir>/field_retrieval_zpe_results/
+$RESULTS_MOUNT/Members/YourName/experiment_folder/<subdir>/field_retrieval_zpe_results/
 ```
 
 <details>
@@ -90,7 +93,7 @@ Files from different subdirectories are never mixed in one job — each subdirec
 
 ## If your SSH disconnects or the login node reboots
 
-The orchestrator process runs on the login node. If it dies mid-run (SSH drop, reboot), **no work is lost** — all state is saved on `/beegfs`. SLURM jobs already submitted will keep running. Just reconnect and resume:
+The orchestrator process runs on the login node. If it dies mid-run (SSH drop, reboot), **no work is lost** — all state is saved on scratch. SLURM jobs already submitted will keep running. Just reconnect and resume:
 
 ```bash
 tomo_process --list                          # find your run_id
@@ -123,12 +126,12 @@ tomo_process --cancel tomo_20260729_143201   # cancel a run and its active jobs
 
 Full logs are at:
 ```
-/beegfs/home/ralajan/scratch/tomo_process/<run_id>/logs/orchestrator.log
+$SCRATCH_ROOT/<run_id>/logs/orchestrator.log
 ```
 
 Per-job MATLAB output is at:
 ```
-/beegfs/home/ralajan/scratch/tomo_process/<run_id>/logs/tomo_<run_id>_chunk000N.out
+$SCRATCH_ROOT/<run_id>/logs/tomo_<run_id>_chunk000N.out
 ```
 
 </details>
@@ -150,7 +153,7 @@ Each subdirectory under `--path` must contain:
 <details>
 <summary>What the pipeline produces</summary>
 
-For each subdirectory, results are written to `/mnt/ZPE_cluster_results/<rel_path>/field_retrieval_zpe_results/`:
+For each subdirectory, results are written to `$RESULTS_MOUNT/<rel_path>/field_retrieval_zpe_results/`:
 
 ```
 field_retrieval_zpe_results/
@@ -178,18 +181,18 @@ tomo_process (runs on login node, exits immediately after submitting)
             │
             │  Groups sample files by subdirectory, auto-sizes chunks from walltime
             │
-            ├─ [login node] rsync chunk files: /mnt/guck_division2 → /beegfs/scratch/<run>/<chunk>/
+            ├─ [login node] rsync chunk files: DATA_MOUNT → SCRATCH_ROOT/<run>/<chunk>/
             ├─ sbatch job script (up to 5 jobs in parallel on GPU nodes)
             │      └─ field_Retrieval.m       Stage 1: complex field retrieval
             │      └─ tomogram_Reconstruction.m  Stage 2: 3D RI reconstruction
             │      └─ touch DONE or FAIL marker
             │
-            ├─ [login node] rsync results: /beegfs/scratch/<run>/<chunk>/ → /mnt/ZPE_cluster_results
+            ├─ [login node] rsync results: SCRATCH_ROOT/<run>/<chunk>/ → RESULTS_MOUNT
             ├─ rm scratch data for that chunk
             └─ repeat until all chunks done, then send notification email
 ```
 
-The login node handles all network mount access (`/mnt/...`) because compute nodes do not have those mounts. Only scratch (`/beegfs`) is accessible from compute nodes.
+The login node handles all network mount access (`DATA_MOUNT` / `RESULTS_MOUNT`) because compute nodes typically do not have those mounts. Only scratch (`SCRATCH_ROOT`) needs to be accessible from compute nodes.
 
 </details>
 
@@ -199,7 +202,7 @@ The login node handles all network mount access (`/mnt/...`) because compute nod
 If your dataset fits within scratch space and you want to submit directly:
 
 ```bash
-sbatch scripts/main.sh --data_dir /beegfs/home/ralajan/scratch/my_experiment
+sbatch scripts/main.sh --data_dir /path/to/experiment_data
 ```
 
 `scripts/main.sh` runs both stages sequentially on one GPU node. It does not handle copying from/to the network mounts — you must do that manually.

@@ -13,12 +13,12 @@ echo "Repo : ${REPO_DIR}"
 echo ""
 
 # ── 1. Verify mount point ─────────────────────────────────────────────────────
-echo "[1/4] Checking guck_division2 mount ..."
-if mountpoint -q "${GUCK_DIVISION_2_MOUNT}" 2>/dev/null || [[ -d "${GUCK_DIVISION_2_MOUNT}" ]]; then
-    echo "      OK: ${GUCK_DIVISION_2_MOUNT} is accessible"
+echo "[1/4] Checking data mount (DATA_MOUNT=${DATA_MOUNT}) ..."
+if mountpoint -q "${DATA_MOUNT}" 2>/dev/null || [[ -d "${DATA_MOUNT}" ]]; then
+    echo "      OK: ${DATA_MOUNT} is accessible"
 else
-    echo "      WARNING: ${GUCK_DIVISION_2_MOUNT} is not mounted or not accessible."
-    echo "      The pipeline will fail at runtime if this is not resolved."
+    echo "      WARNING: ${DATA_MOUNT} is not mounted or not accessible."
+    echo "      Update DATA_MOUNT in config.sh, then re-run install.sh."
     echo "      (Continuing install anyway.)"
 fi
 
@@ -62,7 +62,7 @@ echo "Reload your shell or run:"
 echo "  source ~/.bashrc"
 echo ""
 echo "Then process a dataset with:"
-echo "  tomo_process --email you@institute.de --path \"2026_experiment/batch_A\""
+echo "  tomo_process --email you@institute.de --path \"experiment_folder/batch_A\""
 echo ""
 echo "To edit cluster settings (partition, resources, chunk size):"
 echo "  ${REPO_DIR}/config.sh"
