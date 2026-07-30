@@ -13,10 +13,7 @@ Automated pipeline for **Optical Diffraction Tomography (ODT)** — reconstructi
 git clone https://github.com/OpticalDiffractionTomography/ODT_Reconstruction.git
 cd ODT_Reconstruction
 
-# 2. Configure paths for your cluster (edit before installing)
-nano config.sh
-
-# 3. Install the CLI tool
+# 2. Install the CLI tool
 bash install.sh
 source ~/.bashrc
 ```
