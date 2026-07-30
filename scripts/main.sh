@@ -11,11 +11,11 @@
 #SBATCH --time=24:00:00               # Max runtime (HH:MM:SS)
 #SBATCH --mem=128G                    # RAM: 16 workers each hold a full double tomogMap in flight
 #SBATCH --mail-type=all               # Email notifications for start/end/fail
-#SBATCH --mail-user=raghava.alajangi@mpzpm.mpg.de
+#SBATCH --mail-user=<your email address>
 
 # ---------------------------------------------------------------------------
 # Usage:
-#   sbatch main.sh --data_dir /beegfs/home/ralajan/matlab/20260203_Cecile_MDCK
+#   sbatch main.sh --data_dir /path/to/experiment_data
 #
 # Arguments:
 #   --data_dir <path>   Experiment folder containing batch*/ subdirectories
