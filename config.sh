@@ -6,11 +6,11 @@
 
 # Root of the read-only network mount where input data lives.
 # Set to the path where your raw tomogram directories are mounted on the cluster.
-DATA_MOUNT="/mnt/data"                         # read-only: input data
+DATA_MOUNT="/mnt/guck_division2"                    # read-only: input data
 
 # Writable mount where processed results will be written.
 # Set to a path accessible from the login node (compute nodes do not need it).
-RESULTS_MOUNT="/mnt/results"                   # writable: results output
+RESULTS_MOUNT="/mnt/ZPE_cluster_results"            # writable: results output
 
 # Scratch space on fast cluster storage for staging data during processing.
 # Must be accessible from both the login node and compute nodes.
