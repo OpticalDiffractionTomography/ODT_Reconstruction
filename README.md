@@ -72,6 +72,7 @@ tomo_process \
   --path "Members/YourName/experiment_folder" \
   --max-jobs 3          # parallel SLURM jobs (default: 5)
   --mins-per-sample 10  # override time estimate if your samples are faster/slower
+  --nm 1.340            # refractive index of culture medium (default: 1.337)
 ```
 
 **How chunk size is calculated automatically:**
@@ -238,8 +239,8 @@ For each `Field_*.mat` output from Stage 1:
 | `lambda` | Illumination wavelength (µm) |
 | `NA` | Objective numerical aperture |
 | `res` | Camera pixel size (µm) |
-| `n_m = 1.337` | Refractive index of culture medium |
-| `n_s ≈ 1.377` | Expected sample RI (cells) |
+| `n_m` | Refractive index of culture medium (default `1.337`; override with `--nm`) |
+| `n_s` | Expected sample RI (cells); always `n_m + 0.04` |
 | `ZP` | Hologram FFT size |
 | `ZP2 = 512` | Lateral size of 3D Fourier volume |
 | `ZP3 = 256` | Axial size of 3D Fourier volume |
