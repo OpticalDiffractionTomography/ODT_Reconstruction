@@ -22,7 +22,7 @@ usage() {
     cat <<EOF
 Usage:
   tomo_process --email <email> --path <relative_path_under_data_mount>
-               [--max-jobs <N>]  [--mins-per-sample <N>]
+               [--max-jobs <N>]  [--mins-per-sample <N>]  [--nm <float>]
 
   tomo_process --status <run_id>   Show status of a running/finished run
   tomo_process --resume <run_id>   Resume after login node crash/disconnect
@@ -31,6 +31,7 @@ Usage:
 
 Examples:
   tomo_process --email me@lab.de --path "ProjectA/20260715_experiment"
+  tomo_process --email me@lab.de --path "ProjectA/20260715_experiment" --nm 1.340
   tomo_process --status tomo_20260729_143201
   tomo_process --list
 
@@ -168,6 +169,7 @@ cmd_start() {
     local email="" input_path=""
     local max_jobs="${MAX_PARALLEL_JOBS}"
     local mins_per_sample="${MINS_PER_SAMPLE}"
+    local nm="1.337"
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -175,6 +177,7 @@ cmd_start() {
             --path)            input_path="$2";      shift 2 ;;
             --max-jobs)        max_jobs="$2";        shift 2 ;;
             --mins-per-sample) mins_per_sample="$2"; shift 2 ;;
+            --nm)              nm="$2";              shift 2 ;;
             *) die "Unknown argument: $1. Run 'tomo_process --help' for usage." ;;
         esac
     done
@@ -216,12 +219,14 @@ TOMO_SLURM_GRES="${SLURM_GRES}"
 TOMO_SLURM_CPUS="${SLURM_CPUS}"
 TOMO_SLURM_MEM="${SLURM_MEM}"
 TOMO_SLURM_TIME="${SLURM_TIME}"
+TOMO_NM="${nm}"
 EOF
 
     info "Run ID          : ${run_id}"
     info "Scratch         : ${run_scratch}"
     info "Max parallel jobs: ${max_jobs}"
     info "Mins per sample : ${mins_per_sample} (chunk size auto-derived from walltime ${SLURM_TIME})"
+    info "n_m             : ${nm}"
 
     # Launch orchestrator.sh as a nohup background process on the login node.
     # Pass all config via environment variables prefixed TOMO_ to avoid clashes.
@@ -241,6 +246,7 @@ EOF
         TOMO_SLURM_CPUS="${SLURM_CPUS}" \
         TOMO_SLURM_MEM="${SLURM_MEM}" \
         TOMO_SLURM_TIME="${SLURM_TIME}" \
+        TOMO_NM="${nm}" \
         bash "${SCRIPT_DIR}/scripts/orchestrator.sh" \
         >> "${run_scratch}/logs/orchestrator.log" 2>&1 &
 
@@ -304,6 +310,7 @@ cmd_resume() {
         TOMO_SLURM_CPUS="${TOMO_SLURM_CPUS}" \
         TOMO_SLURM_MEM="${TOMO_SLURM_MEM}" \
         TOMO_SLURM_TIME="${TOMO_SLURM_TIME}" \
+        TOMO_NM="${TOMO_NM}" \
         bash "${SCRIPT_DIR}/scripts/orchestrator.sh" \
         >> "${run_dir}/logs/orchestrator.log" 2>&1 &
 
