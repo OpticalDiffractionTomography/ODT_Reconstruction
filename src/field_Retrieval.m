@@ -151,7 +151,7 @@ for sampleNum = 1:length(sampleList)
             p = p - sum(p(pNeg)) / sum(pNeg(:));
             retPhase(:,:,iter) = single(p);
         catch ME
-            retPhase(:,:,iter) = NaN(size(retPhase,1), size(retPhase,2), 'single');
+            retPhase(:,:,iter) = NaN(pSize, pSize, 'single');
         end
     end
     f_dx = f_dx_s;
