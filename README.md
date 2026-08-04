@@ -4,67 +4,124 @@ Automated pipeline for **Optical Diffraction Tomography (ODT)** — reconstructi
 
 ---
 
-## First-time setup
+## Quick-start checklist
 
-> Do this once per cluster account after cloning the repo.
+1. [Connect to the cluster](#1-connect-to-the-cluster)
+2. [Clone the repository](#2-clone-the-repository)
+3. [Configure cluster paths](#3-configure-cluster-paths-configsh)
+4. [Install the CLI tool](#4-install-the-cli-tool)
+5. [Run your first job](#5-run-your-first-job)
+
+---
+
+## 1. Connect to the cluster
+
+Open a terminal (on Windows: **Command Prompt**, **PowerShell**, or **Windows Terminal**) and SSH into the cluster login node:
 
 ```bash
-# 1. Clone onto the cluster
-git clone https://github.com/OpticalDiffractionTomography/ODT_Reconstruction.git
-cd ODT_Reconstruction
+ssh <your_username>@<cluster_login_node>
+# Example:
+ssh ralajan@zpe.intranet.mpl.mpg.de
+```
 
-# 2. Install the CLI tool
+Enter your password or use your SSH key when prompted. All subsequent steps run inside this SSH session.
+
+<details>
+<summary>Tip — stay connected with tmux or screen</summary>  
+
+> ----
+> If your SSH session drops, any interactive process you started will die.
+> Start a persistent shell before doing the setup steps:
+> ```bash
+> tmux new -s setup
+> # or
+> screen -S setup
+> ```
+> Once the `tomo_process` command is running (step 5), you can disconnect freely — it detaches automatically.
+</details>
+
+
+## 2. Clone the repository
+
+```bash
+# Choose a location in your home directory
+cd ~
+git clone https://github.com/RaghavaAlajangi/ODT_Reconstruction.git
+cd ODT_Reconstruction
+```
+
+---
+
+## 3. Configure cluster paths (`config.sh`)
+
+Open `config.sh` in a text editor and update the paths to match your cluster:
+
+```bash
+nano config.sh    # or: vi config.sh
+```
+
+| Variable | Default | What to set it to |
+|---|---|---|
+| `DATA_MOUNT` | `/mnt/guck_division2` | Path where your raw data is accessible (read-only network mount) |
+| `RESULTS_MOUNT` | `/mnt/ZPE_cluster_results` | Path where results should be written (writable network mount) |
+| `SCRATCH_ROOT` | `$HOME/scratch/tomo_process` | Fast local scratch for staging; must be reachable from compute nodes |
+| `MAX_PARALLEL_JOBS` | `5` | Maximum simultaneous SLURM jobs |
+| `SLURM_TIME` | `20:00:00` | Walltime per job (HH:MM:SS) |
+| `MINS_PER_SAMPLE` | `15` | Estimated processing time per sample file — used to auto-size job chunks |
+| `SLURM_PARTITION` | `gpu` | SLURM partition for GPU processing jobs |
+
+Save and close the file before continuing.
+
+---
+
+## 4. Install the CLI tool
+
+Run the installer **once** per cluster account:
+
+```bash
 bash install.sh
 source ~/.bashrc
+```
+
+Verify it worked:
+
+```bash
+tomo_process --help
 ```
 
 <details>
 <summary>What install.sh does</summary>
 
-- Creates the scratch directory (`$SCRATCH_ROOT`, set in `config.sh`)
-- Symlinks `tomo_process` into `~/.local/bin` so it's available system-wide
-- Adds `~/.local/bin` to your `PATH` in `~/.bashrc` if not already there
+- Creates the scratch directory (`$SCRATCH_ROOT`)
+- Symlinks `tomo_process` into `~/.local/bin` so it is available system-wide
+- Adds `~/.local/bin` to your `PATH` in `~/.bashrc` if it is not already there
 - Verifies that `sbatch` and the data mount are accessible
-
-</details>
-
-<details>
-<summary>Configuring cluster settings (config.sh)</summary>
-
-All tunable parameters live in `config.sh`. **Edit this file before running `install.sh`** to match your cluster's paths and resources:
-
-| Variable | Default | Meaning |
-|---|---|---|
-| `DATA_MOUNT` | `/mnt/data` | Path where input data is mounted (read-only) |
-| `RESULTS_MOUNT` | `/mnt/results` | Path where results will be written (writable) |
-| `SCRATCH_ROOT` | `$HOME/scratch/tomo_process` | Fast scratch storage for job staging |
-| `MAX_PARALLEL_JOBS` | `5` | Max simultaneous SLURM jobs |
-| `SLURM_TIME` | `20:00:00` | Walltime per job |
-| `MINS_PER_SAMPLE` | `15` | Estimated minutes per sample file (sets chunk size) |
-| `SLURM_PARTITION` | `gpu` | SLURM partition for processing jobs |
-| `ORCH_PARTITION` | `cpu` | SLURM partition for the orchestrator |
 
 </details>
 
 ---
 
-## Processing a dataset
+## 5. Run your first job
 
 ```bash
-tomo_process --email "you@institute.de" --path "Members/YourName/experiment_folder"
+tomo_process \
+  --email "you@institute.de" \
+  --path "Members/YourName/experiment_folder"
 ```
 
 - `--path` is relative to `$DATA_MOUNT/` (as set in `config.sh`)
 - The folder can contain **multiple subdirectories** — all `sample*_Tomog.mat` files found recursively will be processed
-- You can **disconnect immediately** after running this command — processing continues on the cluster
+- **You can close your terminal immediately** after this command — processing continues on the cluster in the background
+
+You will receive an email when processing starts and again when it finishes (or fails).
 
 **Results appear at:**
 ```
-$RESULTS_MOUNT/Members/YourName/experiment_folder/<subdir>/field_retrieval_zpe_results/
+$RESULTS_MOUNT/Members/YourName/experiment_folder/field_retrieval_zpe_results/
 ```
 
 <details>
-<summary>Additional options</summary>
+<summary>All available options</summary>
 
 ```bash
 tomo_process \
@@ -75,7 +132,7 @@ tomo_process \
   --nm 1.340            # refractive index of culture medium (default: 1.337)
 ```
 
-**How chunk size is calculated automatically:**
+**How job chunk size is calculated automatically:**
 
 ```
 max_samples_per_job = floor(SLURM_TIME / MINS_PER_SAMPLE)
@@ -83,7 +140,7 @@ max_samples_per_job = floor(SLURM_TIME / MINS_PER_SAMPLE)
                     = 80 samples per job
 ```
 
-Files from different subdirectories are never mixed in one job — each subdirectory is processed independently, split into multiple jobs if it has more samples than the limit.
+Files from different subdirectories are never mixed in one job — each subdirectory is processed independently, split across multiple jobs if it contains more samples than the per-job limit.
 
 </details>
 
@@ -91,9 +148,10 @@ Files from different subdirectories are never mixed in one job — each subdirec
 
 ## If your SSH disconnects or the login node reboots
 
-The orchestrator process runs on the login node. If it dies mid-run (SSH drop, reboot), **no work is lost** — all state is saved on scratch. SLURM jobs already submitted will keep running. Just reconnect and resume:
+The orchestrator process detaches from your terminal automatically (via `nohup`), so a dropped SSH connection does **not** interrupt it. However, if the login node itself reboots, the orchestrator process will die. In that case, **no work is lost** — all state is saved on scratch and SLURM jobs already submitted keep running. Just reconnect and resume:
 
 ```bash
+ssh <your_username>@<cluster_login_node>
 tomo_process --list                          # find your run_id
 tomo_process --resume tomo_20260729_143201   # restart the orchestrator from where it stopped
 ```
@@ -102,7 +160,7 @@ The orchestrator will re-adopt any SLURM jobs still in the queue and continue su
 
 ---
 
-## Monitoring
+## Monitoring a run
 
 ```bash
 tomo_process --list                          # list all runs and their status
@@ -122,12 +180,12 @@ tomo_process --cancel tomo_20260729_143201   # cancel a run and its active jobs
   Failed       : 0      ← check logs if this is non-zero
 ```
 
-Full logs are at:
+Full orchestrator log:
 ```
 $SCRATCH_ROOT/<run_id>/logs/orchestrator.log
 ```
 
-Per-job MATLAB output is at:
+Per-job MATLAB output:
 ```
 $SCRATCH_ROOT/<run_id>/logs/tomo_<run_id>_chunk000N.out
 ```
@@ -181,7 +239,7 @@ tomo_process (runs on login node, exits immediately after submitting)
             │
             ├─ [login node] rsync chunk files: DATA_MOUNT → SCRATCH_ROOT/<run>/<chunk>/
             ├─ sbatch job script (up to 5 jobs in parallel on GPU nodes)
-            │      └─ field_Retrieval.m       Stage 1: complex field retrieval
+            │      └─ field_Retrieval.m          Stage 1: complex field retrieval
             │      └─ tomogram_Reconstruction.m  Stage 2: 3D RI reconstruction
             │      └─ touch DONE or FAIL marker
             │
@@ -197,7 +255,7 @@ The login node handles all network mount access (`DATA_MOUNT` / `RESULTS_MOUNT`)
 <details>
 <summary>Manual submission (single dataset, advanced)</summary>
 
-If your dataset fits within scratch space and you want to submit directly:
+If your dataset fits within scratch space and you want to submit directly without the orchestrator:
 
 ```bash
 sbatch scripts/main.sh --data_dir /path/to/experiment_data
