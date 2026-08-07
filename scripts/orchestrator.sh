@@ -152,7 +152,9 @@ collect_finished() {
             local dst_dir="${TOMO_RESULTS_MOUNT}/${rel_src}/field_retrieval_zpe_results"
             log "Chunk ${cid} done — copying results to ${dst_dir}/"
             mkdir -p "${dst_dir}"
-            rsync -a "${RUN_SCRATCH}/${cid}/data/field_retrieval/" "${dst_dir}/" \
+            # --ignore-times: always overwrite existing results from a previous
+            # run — the size+mtime quick-check is unreliable on network mounts
+            rsync -a --ignore-times "${RUN_SCRATCH}/${cid}/data/field_retrieval/" "${dst_dir}/" \
                 && log "  Results copied for ${cid}" \
                 || log "WARNING: rsync to /mnt failed for ${cid}"
             rm -rf "${RUN_SCRATCH:?}/${cid}"

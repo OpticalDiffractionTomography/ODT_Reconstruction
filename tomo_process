@@ -21,8 +21,9 @@ source "${SCRIPT_DIR}/config.sh"
 usage() {
     cat <<EOF
 Usage:
-  tomo_process --email <email> --path <relative_path_under_data_mount>
-               [--max-jobs <N>]  [--mins-per-sample <N>]  [--nm <float>]
+  tomo_process --path <relative_path_under_data_mount>
+               [--email <email>]  [--max-jobs <N>]
+               [--mins-per-sample <N>]  [--nm <float>]
 
   tomo_process --status <run_id>   Show status of a running/finished run
   tomo_process --resume <run_id>   Resume after login node crash/disconnect
@@ -30,12 +31,13 @@ Usage:
   tomo_process --cancel <run_id>   Cancel an active run
 
 Examples:
-  tomo_process --email me@lab.de --path "ProjectA/20260715_experiment"
-  tomo_process --email me@lab.de --path "ProjectA/20260715_experiment" --nm 1.340
+  tomo_process --path "ProjectA/20260715_experiment"
+  tomo_process --path "ProjectA/20260715_experiment" --nm 1.340
   tomo_process --status tomo_20260729_143201
   tomo_process --list
 
 Notes:
+  - Notification email is taken from EMAIL in config.sh; --email overrides it.
   - <path> is relative to ${DATA_MOUNT}/
   - <path> can contain multiple subdirectories; all sample*_Tomog.mat files
     found recursively will be processed.
@@ -218,7 +220,7 @@ cmd_cancel() {
 
 # ── Sub-command: start ────────────────────────────────────────────────────────
 cmd_start() {
-    local email="" input_path=""
+    local email="${EMAIL:-}" input_path=""
     local max_jobs="${MAX_PARALLEL_JOBS}"
     local mins_per_sample="${MINS_PER_SAMPLE}"
     local nm="1.337"
@@ -234,7 +236,7 @@ cmd_start() {
         esac
     done
 
-    [[ -z "${email}" ]]      && die "--email is required"
+    [[ -z "${email}" ]]      && die "no notification email set — set EMAIL in config.sh (one-time) or pass --email"
     [[ -z "${input_path}" ]] && die "--path is required"
 
     local resolved_path
@@ -312,7 +314,7 @@ EOF
     info "  tomo_process --list"
     info ""
     info "Results will appear at:"
-    info "  ${DATA_MOUNT}/${input_path}/_results/"
+    info "  ${RESULTS_MOUNT}/${input_path}/<subdir>/field_retrieval_zpe_results/"
     info ""
     info "Full log:"
     info "  ${run_scratch}/logs/orchestrator.log"

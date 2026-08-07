@@ -58,11 +58,16 @@ fi
 echo ""
 echo "=== Installation complete ==="
 echo ""
+if [[ -z "${EMAIL:-}" ]]; then
+    echo "NOTE: EMAIL is not set in config.sh — set it once to get job notifications"
+    echo "      without typing --email every time:  nano ${REPO_DIR}/config.sh"
+    echo ""
+fi
 echo "Reload your shell or run:"
 echo "  source ~/.bashrc"
 echo ""
 echo "Then process a dataset with:"
-echo "  tomo_process --email you@institute.de --path \"experiment_folder/batch_A\""
+echo "  tomo_process --path \"experiment_folder/batch_A\""
 echo ""
 echo "To edit cluster settings (partition, resources, chunk size):"
 echo "  ${REPO_DIR}/config.sh"
