@@ -2,6 +2,12 @@
 # config.sh — cluster-wide constants for tomo_process
 # Edit these values once after cloning; all other scripts source this file.
 
+# ── User settings ────────────────────────────────────────────────────────────
+
+# Your email for notifications (processing started / finished / failed).
+# Set this once; you can still override it per run with --email.
+EMAIL=""
+
 # ── Cluster paths ────────────────────────────────────────────────────────────
 
 # Root of the read-only network mount where input data lives.
