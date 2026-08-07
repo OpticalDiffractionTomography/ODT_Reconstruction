@@ -110,6 +110,7 @@ tomo_process \
 ```
 
 - `--path` is relative to `$DATA_MOUNT/` (as set in `config.sh`)
+- Pasted Windows paths (e.g. `U:\Data\Members\YourName\experiment_folder`) are auto-corrected: the drive letter is stripped and up to 3 leading folders are dropped until the path is found under `$DATA_MOUNT/`; if it still can't be found, the script lists the paths it tried and how to fix yours
 - The folder can contain **multiple subdirectories** — all `sample*_Tomog.mat` files found recursively will be processed
 - **You can close your terminal immediately** after this command — processing continues on the cluster in the background
 
