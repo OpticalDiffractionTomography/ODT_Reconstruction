@@ -7,7 +7,8 @@
 #   TOMO_CHUNK_SIZE, TOMO_MAX_JOBS, TOMO_REPO_DIR,
 #   TOMO_SCRATCH_ROOT, TOMO_DATA_MOUNT, TOMO_RESULTS_MOUNT,
 #   TOMO_POLL_INTERVAL, TOMO_SLURM_PARTITION, TOMO_SLURM_GRES,
-#   TOMO_SLURM_CPUS, TOMO_SLURM_MEM, TOMO_SLURM_TIME, TOMO_MINS_PER_SAMPLE
+#   TOMO_SLURM_CPUS, TOMO_SLURM_MEM, TOMO_SLURM_TIME, TOMO_MINS_PER_SAMPLE,
+#   TOMO_NM
 
 set -euo pipefail
 
@@ -213,6 +214,7 @@ submit_chunk() {
         -e "s|__CPUS__|${TOMO_SLURM_CPUS}|g" \
         -e "s|__MEM__|${TOMO_SLURM_MEM}|g" \
         -e "s|__TIME__|${TOMO_SLURM_TIME}|g" \
+        -e "s|__NM__|${TOMO_NM}|g" \
         "${TOMO_REPO_DIR}/scripts/bash_template.sh" > "${job_script}"
     chmod +x "${job_script}"
 

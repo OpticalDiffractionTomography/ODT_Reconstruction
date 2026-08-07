@@ -45,8 +45,8 @@ for sampleNum = 1:length(sampleList)
 
     %% Build TomoParam
     logfn('  Building TomoParam struct...');
-    n_m = 1.337;
-    n_s = 1.337+0.04;
+    if ~exist('n_m', 'var'); n_m = 1.337; end
+    n_s = n_m + 0.04;
     ZP = round(1.2*xx/2)*2;
     crop_factor = crop_size/original_size;
     res2 = res/crop_factor;

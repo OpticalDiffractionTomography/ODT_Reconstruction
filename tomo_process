@@ -22,7 +22,7 @@ usage() {
     cat <<EOF
 Usage:
   tomo_process --email <email> --path <relative_path_under_data_mount>
-               [--max-jobs <N>]  [--mins-per-sample <N>]
+               [--max-jobs <N>]  [--mins-per-sample <N>]  [--nm <float>]
 
   tomo_process --status <run_id>   Show status of a running/finished run
   tomo_process --resume <run_id>   Resume after login node crash/disconnect
@@ -31,6 +31,7 @@ Usage:
 
 Examples:
   tomo_process --email me@lab.de --path "ProjectA/20260715_experiment"
+  tomo_process --email me@lab.de --path "ProjectA/20260715_experiment" --nm 1.340
   tomo_process --status tomo_20260729_143201
   tomo_process --list
 
@@ -49,6 +50,58 @@ EOF
 
 die()  { echo "ERROR: $*" >&2; exit 1; }
 info() { echo "[tomo_process] $*"; }
+
+# Resolve the user-supplied --path against DATA_MOUNT.
+# Users often paste Windows-style paths (e.g. U:\Data\Members\...) whose leading
+# folders don't exist under the mount. Strategy:
+#   1. normalize slashes; strip a drive letter (U:), the mount path itself,
+#      and leading/trailing slashes
+#   2. try the path as given under DATA_MOUNT
+#   3. drop up to 3 leading components, retrying after each
+# Prints the resolved relative path on stdout; all messages go to stderr.
+resolve_input_path() {
+    local raw="$1"
+    local p="${raw//\\//}"                 # backslash → forward slash
+    if [[ "${p}" =~ ^[A-Za-z]:(.*)$ ]]; then
+        p="${BASH_REMATCH[1]}"             # strip Windows drive letter (U:)
+    fi
+    p="${p#"${DATA_MOUNT}"}"               # strip the mount itself if included
+    p="${p#/}"                             # strip leading slash
+    p="${p%/}"                             # strip trailing slash
+
+    local candidate="${p}" tried=() step
+    for step in 0 1 2 3; do
+        [[ -n "${candidate}" ]] || break
+        if [[ -d "${DATA_MOUNT}/${candidate}" ]]; then
+            if [[ "${step}" -gt 0 || "${candidate}" != "${raw}" ]]; then
+                info "Resolved --path '${raw}' to '${candidate}' under ${DATA_MOUNT}/" >&2
+            fi
+            echo "${candidate}"
+            return 0
+        fi
+        tried+=("${DATA_MOUNT}/${candidate}")
+        [[ "${candidate}" == */* ]] || break
+        candidate="${candidate#*/}"        # drop the first path component
+    done
+
+    {
+        echo "ERROR: --path '${raw}' not found under ${DATA_MOUNT}."
+        echo "  Tried:"
+        local t
+        for t in "${tried[@]}"; do
+            echo "    ${t}"
+        done
+        echo ""
+        echo "  --path must be relative to ${DATA_MOUNT}/ on the cluster, e.g.:"
+        echo "    tomo_process --email you@lab.de --path \"Members/YourName/experiment_folder\""
+        echo ""
+        echo "  If you copied a Windows path (like U:\\...), drop the drive letter and"
+        echo "  any folders above the mount point — keep only the part that exists"
+        echo "  below ${DATA_MOUNT}/."
+        echo "  Hint: run 'ls ${DATA_MOUNT}/' to see the available top-level folders."
+    } >&2
+    return 1
+}
 
 # ── Sub-command: list ─────────────────────────────────────────────────────────
 cmd_list() {
@@ -168,6 +221,7 @@ cmd_start() {
     local email="" input_path=""
     local max_jobs="${MAX_PARALLEL_JOBS}"
     local mins_per_sample="${MINS_PER_SAMPLE}"
+    local nm="1.337"
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -175,6 +229,7 @@ cmd_start() {
             --path)            input_path="$2";      shift 2 ;;
             --max-jobs)        max_jobs="$2";        shift 2 ;;
             --mins-per-sample) mins_per_sample="$2"; shift 2 ;;
+            --nm)              nm="$2";              shift 2 ;;
             *) die "Unknown argument: $1. Run 'tomo_process --help' for usage." ;;
         esac
     done
@@ -182,10 +237,10 @@ cmd_start() {
     [[ -z "${email}" ]]      && die "--email is required"
     [[ -z "${input_path}" ]] && die "--path is required"
 
-    input_path="${input_path//\\//}"   # backslash → forward slash
-    input_path="${input_path#/}"       # strip any leading slash
+    local resolved_path
+    resolved_path="$(resolve_input_path "${input_path}")" || exit 1
+    input_path="${resolved_path}"
     local src_path="${DATA_MOUNT}/${input_path}"
-    [[ -d "${src_path}" ]] || die "Path not found: ${src_path}"
 
     local nfiles
     nfiles=$(find "${src_path}" -name "sample*_Tomog.mat" | wc -l)
@@ -216,12 +271,14 @@ TOMO_SLURM_GRES="${SLURM_GRES}"
 TOMO_SLURM_CPUS="${SLURM_CPUS}"
 TOMO_SLURM_MEM="${SLURM_MEM}"
 TOMO_SLURM_TIME="${SLURM_TIME}"
+TOMO_NM="${nm}"
 EOF
 
     info "Run ID          : ${run_id}"
     info "Scratch         : ${run_scratch}"
     info "Max parallel jobs: ${max_jobs}"
     info "Mins per sample : ${mins_per_sample} (chunk size auto-derived from walltime ${SLURM_TIME})"
+    info "n_m             : ${nm}"
 
     # Launch orchestrator.sh as a nohup background process on the login node.
     # Pass all config via environment variables prefixed TOMO_ to avoid clashes.
@@ -241,6 +298,7 @@ EOF
         TOMO_SLURM_CPUS="${SLURM_CPUS}" \
         TOMO_SLURM_MEM="${SLURM_MEM}" \
         TOMO_SLURM_TIME="${SLURM_TIME}" \
+        TOMO_NM="${nm}" \
         bash "${SCRIPT_DIR}/scripts/orchestrator.sh" \
         >> "${run_scratch}/logs/orchestrator.log" 2>&1 &
 
@@ -304,6 +362,7 @@ cmd_resume() {
         TOMO_SLURM_CPUS="${TOMO_SLURM_CPUS}" \
         TOMO_SLURM_MEM="${TOMO_SLURM_MEM}" \
         TOMO_SLURM_TIME="${TOMO_SLURM_TIME}" \
+        TOMO_NM="${TOMO_NM}" \
         bash "${SCRIPT_DIR}/scripts/orchestrator.sh" \
         >> "${run_dir}/logs/orchestrator.log" 2>&1 &
 
