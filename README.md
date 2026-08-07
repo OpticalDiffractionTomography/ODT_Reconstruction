@@ -2,49 +2,10 @@
 
 Automated pipeline for **Optical Diffraction Tomography (ODT)** — reconstructing 3D refractive index maps of biological samples from interferometric holographic measurements on an HPC cluster.
 
-> **First time here?** Do the [One-time setup](#one-time-setup-do-once) first (4 steps, ~5 minutes).
-> **Already set up?** You only ever need the 2 steps below.
+</details>
 
----
-
-## Run jobs (2 steps)
-
-**Step 1 — log in to the cluster:**
-
-```bash
-ssh <your_username>@zpe.intranet.mpl.mpg.de
-```
-
-**Step 2 — start processing:**
-
-```bash
-tomo_process --path "<paste your dataset path here>"
-```
-
-Example — copy the folder path from Windows File Explorer and paste it as it is:
-
-```bash
-tomo_process --path "U:\Members\YourName\20260715_experiment"
-```
-
-Done — you can **close the terminal immediately**; processing continues on the cluster. You will get an email when it starts and when it finishes.
-
-Good to know:
-
-- Windows paths (drive letter, backslashes) are converted automatically — no need to edit them.
-- The folder can contain multiple subdirectories; all `sample*_Tomog.mat` files are found and processed.
-- **Re-running the same dataset overwrites the old results.**
-- Need to change the refractive index of the medium? Add `--nm`, e.g. `--nm 1.340` (default: `1.337`). See [Options](#options).
-
-**Results appear at:**
-
-```
-<RESULTS_MOUNT>/Members/YourName/experiment_folder/.../field_retrieval_zpe_results/
-```
-
----
-
-## One-time setup (do once)
+<details>
+<summary><h2>First time here? — One-time setup (4 steps, do once)</h2></summary>
 
 These 4 steps are needed **only once** per cluster account. After that, use the 2 steps above.
 
@@ -97,7 +58,54 @@ Check that it works:
 tomo_process --help
 ```
 
-That's it — go to [Run jobs](#run-jobs-2-steps).
+That's it — from now on you only need the 2 steps in **Run jobs** below.
+
+</details>
+
+----
+
+<details open>
+<summary><h2>Done with setup? — Run jobs (2 steps)</h2></summary>
+
+**Step 1 — log in to the cluster:**
+
+```bash
+ssh <your_username>@zpe.intranet.mpl.mpg.de
+```
+
+**Step 2 — start processing:**
+
+```bash
+tomo_process --path "<paste your dataset path here>"
+```
+
+Example — copy the folder path from Windows File Explorer and paste it as it is:
+
+```bash
+tomo_process --path "U:\Members\YourName\20260715_experiment"
+```
+
+Done — you can **close the terminal immediately**; processing continues on the cluster. You will get an email when it starts and when it finishes.
+
+Good to know:
+
+- Windows paths (drive letter, backslashes) are converted automatically — no need to edit them.
+- The folder can contain multiple subdirectories; all `sample*_Tomog.mat` files are found and processed.
+- **Re-running the same dataset overwrites the old results.**
+- Need to change the refractive index of the medium? Add `--nm`, e.g. `--nm 1.340` (default: `1.337`). See [Options](#options).
+
+**Where results appear:** on the results mount, following the **same folder structure as your data**. For the example above:
+
+```
+Your data : <DATA_MOUNT>/Members/YourName/20260715_experiment/
+Results   : <RESULTS_MOUNT>/Members/YourName/20260715_experiment/field_retrieval_zpe_results/
+```
+
+If your experiment folder contains subfolders (e.g. one per batch), each subfolder gets its own `field_retrieval_zpe_results/` next to its sample files.
+
+(`DATA_MOUNT` and `RESULTS_MOUNT` are the two paths set in `config.sh` during setup.)
+
+
 
 ---
 
