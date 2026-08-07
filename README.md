@@ -2,162 +2,115 @@
 
 Automated pipeline for **Optical Diffraction Tomography (ODT)** — reconstructing 3D refractive index maps of biological samples from interferometric holographic measurements on an HPC cluster.
 
----
-
-## Quick-start checklist
-
-1. [Connect to the cluster](#1-connect-to-the-cluster)
-2. [Clone the repository](#2-clone-the-repository)
-3. [Configure cluster paths](#3-configure-cluster-paths-configsh)
-4. [Install the CLI tool](#4-install-the-cli-tool)
-5. [Run your first job](#5-run-your-first-job)
+> **First time here?** Do the [One-time setup](#one-time-setup-do-once) first (4 steps, ~5 minutes).
+> **Already set up?** You only ever need the 2 steps below.
 
 ---
 
-## 1. Connect to the cluster
+## Run jobs (2 steps)
 
-Open a terminal (on Windows: **Command Prompt**, **PowerShell**, or **Windows Terminal**) and SSH into the cluster login node:
+**Step 1 — log in to the cluster:**
 
 ```bash
-ssh <your_username>@<cluster_login_node>
-# Example:
-ssh ralajan@zpe.intranet.mpl.mpg.de
+ssh <your_username>@zpe.intranet.mpl.mpg.de
 ```
 
-Enter your password or use your SSH key when prompted. All subsequent steps run inside this SSH session.
-
-<details>
-<summary>Tip — stay connected with tmux or screen</summary>  
-
-> ----
-> If your SSH session drops, any interactive process you started will die.
-> Start a persistent shell before doing the setup steps:
-> ```bash
-> tmux new -s setup
-> # or
-> screen -S setup
-> ```
-> Once the `tomo_process` command is running (step 5), you can disconnect freely — it detaches automatically.
-</details>
-
-
-## 2. Clone the repository
+**Step 2 — start processing:**
 
 ```bash
-# Choose a location in your home directory
+tomo_process --path "<paste your dataset path here>"
+```
+
+Example — copy the folder path from Windows File Explorer and paste it as it is:
+
+```bash
+tomo_process --path "U:\Members\YourName\20260715_experiment"
+```
+
+Done — you can **close the terminal immediately**; processing continues on the cluster. You will get an email when it starts and when it finishes.
+
+Good to know:
+
+- Windows paths (drive letter, backslashes) are converted automatically — no need to edit them.
+- The folder can contain multiple subdirectories; all `sample*_Tomog.mat` files are found and processed.
+- **Re-running the same dataset overwrites the old results.**
+- Need to change the refractive index of the medium? Add `--nm`, e.g. `--nm 1.340` (default: `1.337`). See [Options](#options).
+
+**Results appear at:**
+
+```
+<RESULTS_MOUNT>/Members/YourName/experiment_folder/.../field_retrieval_zpe_results/
+```
+
+---
+
+## One-time setup (do once)
+
+These 4 steps are needed **only once** per cluster account. After that, use the 2 steps above.
+
+### 1. Log in to the cluster
+
+Open a terminal (on Windows: **Command Prompt** or **PowerShell**) and connect:
+
+```bash
+ssh <your_username>@zpe.intranet.mpl.mpg.de
+```
+
+### 2. Get the code
+
+```bash
 cd ~
-git clone https://github.com/RaghavaAlajangi/ODT_Reconstruction.git
+git clone https://github.com/OpticalDiffractionTomography/ODT_Reconstruction.git
 cd ODT_Reconstruction
 ```
 
----
+### 3. Set your email and check the paths
 
-## 3. Configure cluster paths (`config.sh`)
-
-Open `config.sh` in a text editor and update the paths to match your cluster:
+Open the config file:
 
 ```bash
-nano config.sh    # or: vi config.sh
+nano config.sh
 ```
 
-| Variable | Default | What to set it to |
-|---|---|---|
-| `DATA_MOUNT` | `/mnt/guck_division2` | Path where your raw data is accessible (read-only network mount) |
-| `RESULTS_MOUNT` | `/mnt/ZPE_cluster_results` | Path where results should be written (writable network mount) |
-| `SCRATCH_ROOT` | `$HOME/scratch/tomo_process` | Fast local scratch for staging; must be reachable from compute nodes |
-| `MAX_PARALLEL_JOBS` | `5` | Maximum simultaneous SLURM jobs |
-| `SLURM_TIME` | `20:00:00` | Walltime per job (HH:MM:SS) |
-| `MINS_PER_SAMPLE` | `15` | Estimated processing time per sample file — used to auto-size job chunks |
-| `SLURM_PARTITION` | `gpu` | SLURM partition for GPU processing jobs |
+Set your email and check that the two mount paths are correct for your cluster:
 
-Save and close the file before continuing.
+```bash
+EMAIL="you@institute.de"                    # ← set your email here
+DATA_MOUNT="/mnt/guck_division2"            # ← where your raw data is
+RESULTS_MOUNT="/mnt/ZPE_cluster_results"    # ← where results are written
+```
 
----
+Save and close: press `Ctrl+O`, then `Enter`, then `Ctrl+X`.
 
-## 4. Install the CLI tool
+Everything else in the file has working defaults — leave it as is.
 
-Run the installer **once** per cluster account:
+### 4. Install the command
 
 ```bash
 bash install.sh
 source ~/.bashrc
 ```
 
-Verify it worked:
+Check that it works:
 
 ```bash
 tomo_process --help
 ```
 
-<details>
-<summary>What install.sh does</summary>
-
-- Creates the scratch directory (`$SCRATCH_ROOT`)
-- Symlinks `tomo_process` into `~/.local/bin` so it is available system-wide
-- Adds `~/.local/bin` to your `PATH` in `~/.bashrc` if it is not already there
-- Verifies that `sbatch` and the data mount are accessible
-
-</details>
+That's it — go to [Run jobs](#run-jobs-2-steps).
 
 ---
 
-## 5. Run your first job
+## Options
 
-```bash
-tomo_process \
-  --email "you@institute.de" \
-  --path "Members/YourName/experiment_folder"
-```
+| Option | What it does | Default |
+|---|---|---|
+| `--nm 1.340` | Refractive index of the culture medium | `1.337` |
+| `--email you@lab.de` | Notification email for this run only | `EMAIL` from `config.sh` |
+| `--max-jobs 3` | Parallel SLURM jobs | `5` |
+| `--mins-per-sample 10` | Time estimate per sample (used to size jobs) | `15` |
 
-- `--path` is relative to `$DATA_MOUNT/` (as set in `config.sh`)
-- Pasted Windows paths (e.g. `U:\Data\Members\YourName\experiment_folder`) are auto-corrected: the drive letter is stripped and up to 3 leading folders are dropped until the path is found under `$DATA_MOUNT/`; if it still can't be found, the script lists the paths it tried and how to fix yours
-- The folder can contain **multiple subdirectories** — all `sample*_Tomog.mat` files found recursively will be processed
-- **You can close your terminal immediately** after this command — processing continues on the cluster in the background
-
-You will receive an email when processing starts and again when it finishes (or fails).
-
-**Results appear at:**
-```
-$RESULTS_MOUNT/Members/YourName/experiment_folder/field_retrieval_zpe_results/
-```
-
-<details>
-<summary>All available options</summary>
-
-```bash
-tomo_process \
-  --email "you@institute.de" \
-  --path "Members/YourName/experiment_folder" \
-  --max-jobs 3          # parallel SLURM jobs (default: 5)
-  --mins-per-sample 10  # override time estimate if your samples are faster/slower
-  --nm 1.340            # refractive index of culture medium (default: 1.337)
-```
-
-**How job chunk size is calculated automatically:**
-
-```
-max_samples_per_job = floor(SLURM_TIME / MINS_PER_SAMPLE)
-                    = floor(20h × 60min / 15min)
-                    = 80 samples per job
-```
-
-Files from different subdirectories are never mixed in one job — each subdirectory is processed independently, split across multiple jobs if it contains more samples than the per-job limit.
-
-</details>
-
----
-
-## If your SSH disconnects or the login node reboots
-
-The orchestrator process detaches from your terminal automatically (via `nohup`), so a dropped SSH connection does **not** interrupt it. However, if the login node itself reboots, the orchestrator process will die. In that case, **no work is lost** — all state is saved on scratch and SLURM jobs already submitted keep running. Just reconnect and resume:
-
-```bash
-ssh <your_username>@<cluster_login_node>
-tomo_process --list                          # find your run_id
-tomo_process --resume tomo_20260729_143201   # restart the orchestrator from where it stopped
-```
-
-The orchestrator will re-adopt any SLURM jobs still in the queue and continue submitting remaining chunks.
+Run `tomo_process --help` for the full list.
 
 ---
 
@@ -195,6 +148,18 @@ $SCRATCH_ROOT/<run_id>/logs/tomo_<run_id>_chunk000N.out
 
 ---
 
+## If your SSH disconnects or the login node reboots
+
+A dropped SSH connection does **not** interrupt processing. If the login node itself reboots, no work is lost — just reconnect and resume:
+
+```bash
+ssh <your_username>@zpe.intranet.mpl.mpg.de
+tomo_process --list                          # find your run_id
+tomo_process --resume tomo_20260729_143201   # continue from where it stopped
+```
+
+---
+
 ## Data requirements
 
 Each subdirectory under `--path` must contain:
@@ -228,6 +193,23 @@ field_retrieval_zpe_results/
 
 ---
 
+## Advanced
+
+<details>
+<summary>How job chunking works</summary>
+
+Jobs are auto-sized from the walltime and the per-sample time estimate:
+
+```
+max_samples_per_job = floor(SLURM_TIME / MINS_PER_SAMPLE)
+                    = floor(20h × 60min / 15min)
+                    = 80 samples per job
+```
+
+Files from different subdirectories are never mixed in one job — each subdirectory is processed independently, split across multiple jobs if it contains more samples than the per-job limit.
+
+</details>
+
 <details>
 <summary>How it works internally</summary>
 
@@ -250,6 +232,8 @@ tomo_process (runs on login node, exits immediately after submitting)
 ```
 
 The login node handles all network mount access (`DATA_MOUNT` / `RESULTS_MOUNT`) because compute nodes typically do not have those mounts. Only scratch (`SCRATCH_ROOT`) needs to be accessible from compute nodes.
+
+If a pasted `--path` cannot be found under `DATA_MOUNT`, the script strips the drive letter and drops up to 3 leading folders while searching; if it still fails, it lists the paths it tried and how to fix yours.
 
 </details>
 
@@ -303,5 +287,15 @@ For each `Field_*.mat` output from Stage 1:
 | `ZP` | Hologram FFT size |
 | `ZP2 = 512` | Lateral size of 3D Fourier volume |
 | `ZP3 = 256` | Axial size of 3D Fourier volume |
+
+### Stay connected during setup (tmux)
+
+If your SSH session drops during the one-time setup, interactive commands die with it. Start a persistent shell first:
+
+```bash
+tmux new -s setup
+```
+
+Once `tomo_process` is running, this is not needed — it detaches automatically.
 
 </details>
