@@ -9,6 +9,9 @@
 #   TOMO_POLL_INTERVAL, TOMO_SLURM_PARTITION, TOMO_SLURM_GRES,
 #   TOMO_SLURM_CPUS, TOMO_SLURM_MEM, TOMO_SLURM_TIME, TOMO_MINS_PER_SAMPLE,
 #   TOMO_NM
+# Optional:
+#   TOMO_ORCH_PARTITION  cpu partition used for SLURM mail-fallback jobs (default: cpu)
+#   TOMO_SMTP_RELAY      SMTP relay host[:port] for direct email via s-nail
 
 set -euo pipefail
 
@@ -46,16 +49,45 @@ send_email() {
             sent=true
         fi
     fi
+    # s-nail can speak SMTP directly to an institute relay — no local MTA
+    # needed on the login node. Full subject + body arrives as a normal email.
+    if [[ "${sent}" == false && -n "${TOMO_SMTP_RELAY:-}" ]] && command -v mail &>/dev/null; then
+        if echo -e "${body}" | mail -s "${full_subject}" \
+                -S mta="smtp://${TOMO_SMTP_RELAY}" \
+                -S from="${TOMO_EMAIL}" \
+                "${TOMO_EMAIL}" &>/dev/null; then
+            sent=true
+        fi
+    fi
     if [[ "${sent}" == false ]] && command -v mail &>/dev/null; then
         if echo -e "${body}" | mail -s "${full_subject}" "${TOMO_EMAIL}" &>/dev/null; then
             sent=true
+        fi
+    fi
+    # Fallback: the login node has no mail relay, but SLURM's own mail
+    # (sent by slurmctld) is known to work on this cluster. Submit a
+    # zero-work job whose NAME carries the message — the user receives
+    # SLURM's END notification with that name in the subject line.
+    if [[ "${sent}" == false ]] && command -v sbatch &>/dev/null; then
+        local jname="tomo_process ${subject}"
+        jname="${jname//—/-}"                       # em-dash → plain dash
+        jname="${jname// /_}"                       # spaces → underscores
+        jname="$(printf '%s' "${jname}" | tr -cd 'A-Za-z0-9._:-' | cut -c1-120)"
+        if sbatch --job-name="${jname}" \
+                  --partition="${TOMO_ORCH_PARTITION:-cpu}" \
+                  --time=00:02:00 --mem=100M \
+                  --output=/dev/null --error=/dev/null \
+                  --mail-type=END --mail-user="${TOMO_EMAIL}" \
+                  --wrap="true" &>/dev/null; then
+            sent=true
+            log "Email sent via SLURM notification job: ${jname}"
         fi
     fi
     # Always write a notification file — readable via --status log
     local note_file="${LOG_DIR}/notification_$(date '+%Y%m%d_%H%M%S').txt"
     printf "Subject: %s\n\n%b\n" "${full_subject}" "${body}" > "${note_file}"
     if [[ "${sent}" == false ]]; then
-        log "NOTE: email not sent (no mail relay); notification saved to ${note_file}"
+        log "NOTE: email not sent (no mail relay, SLURM mail fallback failed); notification saved to ${note_file}"
     fi
 }
 
@@ -126,8 +158,8 @@ else
     log "Split into ${NCHUNKS} job(s) — auto-sized to ~${max_per_job} samples each"
 
     touch "${ACTIVE_FILE}" "${DONE_FILE}" "${FAIL_FILE}"
-    send_email "Started — ${TOMO_RUN_ID}" \
-        "Processing started.\nInput : ${SRC_MOUNT}\nChunks: ${NCHUNKS}\nMax parallel jobs: ${TOMO_MAX_JOBS}\n\nYou will receive one more email when processing finishes."
+    # No "started" email from here — the first chunk job carries SLURM
+    # --mail-type=BEGIN and notifies the user when processing actually starts.
 fi
 touch "${COPYFAIL_FILE}"
 
@@ -208,12 +240,20 @@ submit_chunk() {
     done
     log "  Copied ${#flist[@]} sample files for ${cid}"
 
+    # Only the first chunk job of the run mails on BEGIN — that's the user's
+    # "processing started" email. The marker lives in state/, so a resumed
+    # run doesn't send a second one.
+    local mail_type="NONE"
+    [[ -f "${STATE_DIR}/begin_mail_flagged" ]] || mail_type="BEGIN"
+
     # Generate job script from template; DATA_DIR = chunk_data (flat, no nesting)
     local job_script="${JOBS_DIR}/${cid}.sh"
     local job_name="tomo_${TOMO_RUN_ID}_${cid}"
     sed \
         -e "s|__JOB_NAME__|${job_name}|g" \
         -e "s|__LOG_DIR__|${LOG_DIR}|g" \
+        -e "s|__MAIL_TYPE__|${mail_type}|g" \
+        -e "s|__EMAIL__|${TOMO_EMAIL}|g" \
         -e "s|__DATA_DIR__|${chunk_data}|g" \
         -e "s|__CHUNK_DONE__|${chunk_scratch}/DONE|g" \
         -e "s|__CHUNK_FAIL__|${chunk_scratch}/FAIL|g" \
@@ -231,6 +271,8 @@ submit_chunk() {
     jid=$(sbatch --parsable "${job_script}")
     log "Submitted ${cid} → SLURM job ${jid}"
     echo "${cid}"$'\t'"${jid}" >> "${ACTIVE_FILE}"
+    [[ "${mail_type}" == "BEGIN" ]] && touch "${STATE_DIR}/begin_mail_flagged"
+    return 0
 }
 
 # ── Main loop ─────────────────────────────────────────────────────────────────

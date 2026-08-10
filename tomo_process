@@ -298,6 +298,8 @@ TOMO_SLURM_GRES="${SLURM_GRES}"
 TOMO_SLURM_CPUS="${SLURM_CPUS}"
 TOMO_SLURM_MEM="${SLURM_MEM}"
 TOMO_SLURM_TIME="${SLURM_TIME}"
+TOMO_ORCH_PARTITION="${ORCH_PARTITION:-cpu}"
+TOMO_SMTP_RELAY="${SMTP_RELAY:-}"
 TOMO_NM="${nm}"
 EOF
 
@@ -325,6 +327,8 @@ EOF
         TOMO_SLURM_CPUS="${SLURM_CPUS}" \
         TOMO_SLURM_MEM="${SLURM_MEM}" \
         TOMO_SLURM_TIME="${SLURM_TIME}" \
+        TOMO_ORCH_PARTITION="${ORCH_PARTITION:-cpu}" \
+        TOMO_SMTP_RELAY="${SMTP_RELAY:-}" \
         TOMO_NM="${nm}" \
         bash "${SCRIPT_DIR}/scripts/orchestrator.sh" \
         >> "${run_scratch}/logs/orchestrator.log" 2>&1 &
@@ -421,6 +425,8 @@ cmd_resume() {
         TOMO_SLURM_CPUS="${TOMO_SLURM_CPUS}" \
         TOMO_SLURM_MEM="${TOMO_SLURM_MEM}" \
         TOMO_SLURM_TIME="${TOMO_SLURM_TIME}" \
+        TOMO_ORCH_PARTITION="${TOMO_ORCH_PARTITION:-cpu}" \
+        TOMO_SMTP_RELAY="${TOMO_SMTP_RELAY:-${SMTP_RELAY:-}}" \
         TOMO_NM="${TOMO_NM}" \
         bash "${SCRIPT_DIR}/scripts/orchestrator.sh" \
         >> "${run_dir}/logs/orchestrator.log" 2>&1 &

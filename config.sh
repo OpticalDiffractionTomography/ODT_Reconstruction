@@ -8,6 +8,12 @@
 # Set this once; you can still override it per run with --email.
 EMAIL=""
 
+# SMTP relay for sending notification emails (host[:port]).
+# The login node has no local mail service, so without this, notifications
+# fall back to bare SLURM job emails (subject line only, no message body).
+# Ask IT for your institute's internal SMTP relay, e.g. "mailhost.mpzpm.mpg.de:25".
+SMTP_RELAY=""
+
 # ── Cluster paths ────────────────────────────────────────────────────────────
 
 # Root of the read-only network mount where input data lives.

@@ -6,6 +6,8 @@
 # Placeholders replaced at submission time:
 #   __JOB_NAME__      unique name for this chunk  (e.g. tomo_20260728_chunk003)
 #   __LOG_DIR__       directory for out/err logs
+#   __MAIL_TYPE__     BEGIN for the first chunk of a run, NONE for the rest
+#   __EMAIL__         user email for the BEGIN notification
 #   __DATA_DIR__      chunk staging dir on scratch  ($SCRATCH_ROOT/<run>/<chunk>/data)
 #   __CHUNK_DONE__    touch-file path; orchestrator watches for this
 #   __CHUNK_FAIL__    touch-file path written on failure
@@ -30,8 +32,12 @@
 #SBATCH --cpus-per-task=__CPUS__
 #SBATCH --time=__TIME__
 #SBATCH --mem=__MEM__
-# No SLURM mail here on purpose — the user gets exactly two emails per run
-# (start + finish), sent by the orchestrator, not one per chunk job.
+# Mail: only the FIRST chunk of a run gets --mail-type=BEGIN — that is the
+# user's "processing started" email, sent by slurmctld (no mail relay needed).
+# Every other chunk gets NONE; the orchestrator sends one completion
+# notification after ALL chunks have finished.
+#SBATCH --mail-type=__MAIL_TYPE__
+#SBATCH --mail-user=__EMAIL__
 
 set -euo pipefail
 
