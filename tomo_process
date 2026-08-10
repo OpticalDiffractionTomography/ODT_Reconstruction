@@ -234,10 +234,33 @@ cmd_cancel() {
         fi
     fi
 
+    # Cancel the pending start-notification job FIRST — its dependency=after
+    # would otherwise be released by the chunk cancellations below and fire
+    # a misleading "Started" email.
+    if [[ -f "${state_dir}/start_notify_jid" ]]; then
+        scancel "$(cat "${state_dir}/start_notify_jid")" 2>/dev/null || true
+    fi
+
     if [[ -s "${state_dir}/active_jobs.txt" ]]; then
         while IFS=$'\t' read -r cid jid; do
             scancel "${jid}" 2>/dev/null && info "Cancelled chunk ${cid} (job ${jid})" || true
         done < "${state_dir}/active_jobs.txt"
+    fi
+
+    # Notify by email via a zero-work SLURM job, same mechanism as start/finish
+    local cancel_email="${EMAIL:-}"
+    if [[ -f "${state_dir}/run_env.sh" ]]; then
+        cancel_email="$(source "${state_dir}/run_env.sh" && echo "${TOMO_EMAIL}")"
+    fi
+    if [[ -n "${cancel_email}" ]]; then
+        sbatch --job-name="tomo_process_Cancelled_-_${run_id}" \
+               --partition="${ORCH_PARTITION:-cpu}" \
+               --time=00:02:00 --mem=100M \
+               --output=/dev/null --error=/dev/null \
+               --mail-type=END --mail-user="${cancel_email}" \
+               --wrap="true" &>/dev/null \
+            && info "Cancellation email will be sent to ${cancel_email}" \
+            || info "NOTE: could not submit cancellation notification job"
     fi
 
     info "Run ${run_id} cancelled. Scratch data left at ${run_dir} for inspection."

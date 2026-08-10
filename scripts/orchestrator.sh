@@ -203,7 +203,7 @@ collect_finished() {
             echo "${cid}" >> "${DONE_FILE}"
 
         elif [[ -f "${fail_marker}" ]]; then
-            log "WARNING: Chunk ${cid} FAILED (job ${jid}) — logs: ${LOG_DIR}/tomo_${TOMO_RUN_ID}_${cid}.err"
+            log "WARNING: Chunk ${cid} FAILED (job ${jid}) — logs: ${LOG_DIR}/${TOMO_RUN_ID}_${cid}.err"
             echo "${cid}" >> "${FAIL_FILE}"
             rm -rf "${RUN_SCRATCH:?}/${cid}"
 
@@ -240,20 +240,12 @@ submit_chunk() {
     done
     log "  Copied ${#flist[@]} sample files for ${cid}"
 
-    # Only the first chunk job of the run mails on BEGIN — that's the user's
-    # "processing started" email. The marker lives in state/, so a resumed
-    # run doesn't send a second one.
-    local mail_type="NONE"
-    [[ -f "${STATE_DIR}/begin_mail_flagged" ]] || mail_type="BEGIN"
-
     # Generate job script from template; DATA_DIR = chunk_data (flat, no nesting)
     local job_script="${JOBS_DIR}/${cid}.sh"
-    local job_name="tomo_${TOMO_RUN_ID}_${cid}"
+    local job_name="${TOMO_RUN_ID}_${cid}"
     sed \
         -e "s|__JOB_NAME__|${job_name}|g" \
         -e "s|__LOG_DIR__|${LOG_DIR}|g" \
-        -e "s|__MAIL_TYPE__|${mail_type}|g" \
-        -e "s|__EMAIL__|${TOMO_EMAIL}|g" \
         -e "s|__DATA_DIR__|${chunk_data}|g" \
         -e "s|__CHUNK_DONE__|${chunk_scratch}/DONE|g" \
         -e "s|__CHUNK_FAIL__|${chunk_scratch}/FAIL|g" \
@@ -271,7 +263,29 @@ submit_chunk() {
     jid=$(sbatch --parsable "${job_script}")
     log "Submitted ${cid} → SLURM job ${jid}"
     echo "${cid}"$'\t'"${jid}" >> "${ACTIVE_FILE}"
-    [[ "${mail_type}" == "BEGIN" ]] && touch "${STATE_DIR}/begin_mail_flagged"
+
+    # "Processing started" email: a zero-work job that SLURM holds until the
+    # first chunk job actually starts running (--dependency=after). Its name
+    # is what appears in the email subject:
+    #   Slurm Job_id=... Name=tomo_process_Started_-_<run_id> Began
+    # Its job id is saved in state/ so --cancel can kill it (and so a resumed
+    # run doesn't email twice).
+    if [[ ! -f "${STATE_DIR}/start_notify_jid" ]]; then
+        local notify_jid
+        if notify_jid=$(sbatch --parsable \
+                  --job-name="tomo_process_Started_-_${TOMO_RUN_ID}" \
+                  --partition="${TOMO_ORCH_PARTITION:-cpu}" \
+                  --time=00:02:00 --mem=100M \
+                  --output=/dev/null --error=/dev/null \
+                  --dependency="after:${jid}" \
+                  --mail-type=BEGIN --mail-user="${TOMO_EMAIL}" \
+                  --wrap="true" 2>/dev/null); then
+            echo "${notify_jid}" > "${STATE_DIR}/start_notify_jid"
+            log "Start-notification job ${notify_jid} submitted (emails when ${cid} begins)"
+        else
+            log "WARNING: could not submit start-notification job"
+        fi
+    fi
     return 0
 }
 
