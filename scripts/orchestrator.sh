@@ -152,12 +152,19 @@ collect_finished() {
             local dst_dir="${TOMO_RESULTS_MOUNT}/${rel_src}/field_retrieval_zpe_results"
             log "Chunk ${cid} done — copying results to ${dst_dir}/"
             mkdir -p "${dst_dir}"
+            # --inplace + plain -r: the results mount is SMB/CIFS, which rejects
+            # rsync's mkstemp temp files and chown/chmod/utimes for accounts that
+            # don't map to the share owner — write directly, data only.
             # --ignore-times: always overwrite existing results from a previous
             # run — the size+mtime quick-check is unreliable on network mounts
-            rsync -a --ignore-times "${RUN_SCRATCH}/${cid}/data/field_retrieval/" "${dst_dir}/" \
-                && log "  Results copied for ${cid}" \
-                || log "WARNING: rsync to /mnt failed for ${cid}"
-            rm -rf "${RUN_SCRATCH:?}/${cid}"
+            if rsync -r --inplace --ignore-times "${RUN_SCRATCH}/${cid}/data/field_retrieval/" "${dst_dir}/"; then
+                log "  Results copied for ${cid}"
+                rm -rf "${RUN_SCRATCH:?}/${cid}"
+            else
+                log "WARNING: rsync to /mnt failed for ${cid} — results kept at ${RUN_SCRATCH}/${cid}/data/field_retrieval/"
+                send_email "Results copy FAILED — ${TOMO_RUN_ID}" \
+                    "Chunk ${cid} processed OK but copying results to ${dst_dir} failed.\nResults kept at: ${RUN_SCRATCH}/${cid}/data/field_retrieval/"
+            fi
             echo "${cid}" >> "${DONE_FILE}"
 
         elif [[ -f "${fail_marker}" ]]; then
