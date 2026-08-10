@@ -106,38 +106,63 @@ resolve_input_path() {
 }
 
 # ── Sub-command: list ─────────────────────────────────────────────────────────
+# Print one status line for a run directory
+print_run_line() {
+    local run_dir="$1"
+    local run_id state_dir done_n fail_n total_n status
+    run_id=$(basename "${run_dir}")
+    state_dir="${run_dir}/state"
+
+    done_n=$(wc -l < "${state_dir}/done_chunks.txt" 2>/dev/null || echo 0)
+    fail_n=$(wc -l < "${state_dir}/failed_chunks.txt" 2>/dev/null || echo 0)
+    total_n=$(wc -l < "${state_dir}/chunks.txt" 2>/dev/null || echo "?")
+
+    status="finished"
+    if [[ -f "${state_dir}/orchestrator.pid" ]]; then
+        local pid
+        pid=$(cat "${state_dir}/orchestrator.pid")
+        kill -0 "${pid}" 2>/dev/null && status="RUNNING (pid ${pid})"
+    fi
+
+    printf "  %-24s  %4s / %-4s  %6s  %s\n" \
+        "${run_id}" "${done_n}" "${total_n}" "${fail_n}" "${status}"
+}
+
 cmd_list() {
     if [[ ! -d "${SCRATCH_ROOT}" ]]; then
         info "No runs found (${SCRATCH_ROOT} does not exist)."
         return
     fi
-    local found=0
-    for run_dir in "${SCRATCH_ROOT}"/tomo_*/; do
-        [[ -d "${run_dir}" ]] || continue
-        found=1
-        local run_id
-        run_id=$(basename "${run_dir}")
-        local state_dir="${run_dir}/state"
 
-        local done_n fail_n total_n
-        done_n=$(wc -l < "${state_dir}/done_chunks.txt" 2>/dev/null || echo 0)
-        fail_n=$(wc -l < "${state_dir}/failed_chunks.txt" 2>/dev/null || echo 0)
-        total_n=$(wc -l < "${state_dir}/chunks.txt" 2>/dev/null || echo "?")
+    # Run IDs embed a timestamp, so reverse name order == newest first
+    local run_dirs=()
+    mapfile -t run_dirs < <(find "${SCRATCH_ROOT}" -mindepth 1 -maxdepth 1 -type d -name 'tomo_*' | sort -r)
+    if [[ ${#run_dirs[@]} -eq 0 ]]; then
+        info "No runs found."
+        return
+    fi
 
-        local pid_file="${state_dir}/orchestrator.pid"
-        local status="finished"
-        if [[ -f "${pid_file}" ]]; then
-            local pid
-            pid=$(cat "${pid_file}")
-            if kill -0 "${pid}" 2>/dev/null; then
-                status="running (pid ${pid})"
-            fi
+    local header
+    header=$(printf "  %-24s  %-11s  %-6s  %s" "RUN ID" "DONE/TOTAL" "FAILED" "STATUS")
+
+    echo ""
+    echo "Latest run:"
+    echo "${header}"
+    print_run_line "${run_dirs[0]}"
+
+    if [[ ${#run_dirs[@]} -gt 1 ]]; then
+        echo ""
+        echo "Previous runs:"
+        local i
+        for i in 1 2 3 4; do
+            [[ "${i}" -lt ${#run_dirs[@]} ]] || break
+            print_run_line "${run_dirs[${i}]}"
+        done
+        if [[ ${#run_dirs[@]} -gt 5 ]]; then
+            echo "  ... and $(( ${#run_dirs[@]} - 5 )) older run(s) in ${SCRATCH_ROOT}/"
         fi
-
-        printf "  %-35s  chunks: %s/%s done, %s failed  [%s]\n" \
-            "${run_id}" "${done_n}" "${total_n}" "${fail_n}" "${status}"
-    done
-    [[ "${found}" -eq 0 ]] && info "No runs found."
+    fi
+    echo ""
 }
 
 # ── Sub-command: status ───────────────────────────────────────────────────────
@@ -307,17 +332,52 @@ EOF
     local bg_pid=$!
     echo "${bg_pid}" > "${pid_file}"
 
-    info "Orchestrator running in background (pid ${bg_pid})"
-    info ""
-    info "You can safely disconnect. To check progress:"
-    info "  tomo_process --status ${run_id}"
-    info "  tomo_process --list"
-    info ""
-    info "Results will appear at:"
-    info "  ${RESULTS_MOUNT}/${input_path}/<subdir>/field_retrieval_zpe_results/"
-    info ""
-    info "Full log:"
-    info "  ${run_scratch}/logs/orchestrator.log"
+    # Give the orchestrator a moment to crash on startup errors before
+    # declaring success — an immediate exit means the submission failed.
+    sleep 3
+    if kill -0 "${bg_pid}" 2>/dev/null; then
+        cat <<EOF
+
+==================================================================
+   JOB SUBMITTED SUCCESSFULLY  —  ${run_id}
+==================================================================
+
+  Processing now runs in the background on the login node.
+
+  >>> You can close this terminal / disconnect now. <<<
+
+  You will receive exactly two emails: one when processing
+  starts and one when it finishes (no per-chunk emails).
+
+  Useful commands:
+    tomo_process --status ${run_id}     check progress
+    tomo_process --list                          list your runs
+    tomo_process --cancel ${run_id}     cancel this run
+
+  Results will appear at:
+    ${RESULTS_MOUNT}/${input_path}/<subdir>/field_retrieval_zpe_results/
+
+  Full log:
+    ${run_scratch}/logs/orchestrator.log
+
+EOF
+    else
+        cat <<EOF >&2
+
+==================================================================
+   JOB FAILED TO SUBMIT  —  ${run_id}
+==================================================================
+
+  The orchestrator exited immediately after starting.
+  Last log lines:
+
+$(tail -15 "${run_scratch}/logs/orchestrator.log" 2>/dev/null | sed 's/^/    /')
+
+  Full log: ${run_scratch}/logs/orchestrator.log
+
+EOF
+        exit 1
+    fi
 }
 
 # ── Sub-command: resume ───────────────────────────────────────────────────────
