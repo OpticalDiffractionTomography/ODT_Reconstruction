@@ -25,6 +25,9 @@ CHUNKS_FILE="${STATE_DIR}/chunks.txt"
 ACTIVE_FILE="${STATE_DIR}/active_jobs.txt"
 DONE_FILE="${STATE_DIR}/done_chunks.txt"
 FAIL_FILE="${STATE_DIR}/failed_chunks.txt"
+# Chunks that processed fine but whose results could not be copied to /mnt;
+# reported in the final summary email instead of a per-chunk email.
+COPYFAIL_FILE="${STATE_DIR}/copyfail_chunks.txt"
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 # stdout/stderr are already redirected to ORCH_LOG by nohup in tomo_process;
@@ -124,8 +127,9 @@ else
 
     touch "${ACTIVE_FILE}" "${DONE_FILE}" "${FAIL_FILE}"
     send_email "Started — ${TOMO_RUN_ID}" \
-        "Processing started.\nInput : ${SRC_MOUNT}\nChunks: ${NCHUNKS}\nMax parallel jobs: ${TOMO_MAX_JOBS}"
+        "Processing started.\nInput : ${SRC_MOUNT}\nChunks: ${NCHUNKS}\nMax parallel jobs: ${TOMO_MAX_JOBS}\n\nYou will receive one more email when processing finishes."
 fi
+touch "${COPYFAIL_FILE}"
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 count_active() {
@@ -162,16 +166,13 @@ collect_finished() {
                 rm -rf "${RUN_SCRATCH:?}/${cid}"
             else
                 log "WARNING: rsync to /mnt failed for ${cid} — results kept at ${RUN_SCRATCH}/${cid}/data/field_retrieval/"
-                send_email "Results copy FAILED — ${TOMO_RUN_ID}" \
-                    "Chunk ${cid} processed OK but copying results to ${dst_dir} failed.\nResults kept at: ${RUN_SCRATCH}/${cid}/data/field_retrieval/"
+                echo "${cid}" >> "${COPYFAIL_FILE}"
             fi
             echo "${cid}" >> "${DONE_FILE}"
 
         elif [[ -f "${fail_marker}" ]]; then
-            log "WARNING: Chunk ${cid} FAILED (job ${jid})"
+            log "WARNING: Chunk ${cid} FAILED (job ${jid}) — logs: ${LOG_DIR}/tomo_${TOMO_RUN_ID}_${cid}.err"
             echo "${cid}" >> "${FAIL_FILE}"
-            send_email "Chunk FAILED — ${TOMO_RUN_ID}" \
-                "Chunk ${cid} (job ${jid}) failed.\nLogs: ${LOG_DIR}/${cid}.err\nScratch kept at: ${RUN_SCRATCH}/${cid}"
             rm -rf "${RUN_SCRATCH:?}/${cid}"
 
         else
@@ -213,7 +214,6 @@ submit_chunk() {
     sed \
         -e "s|__JOB_NAME__|${job_name}|g" \
         -e "s|__LOG_DIR__|${LOG_DIR}|g" \
-        -e "s|__EMAIL__|${TOMO_EMAIL}|g" \
         -e "s|__DATA_DIR__|${chunk_data}|g" \
         -e "s|__CHUNK_DONE__|${chunk_scratch}/DONE|g" \
         -e "s|__CHUNK_FAIL__|${chunk_scratch}/FAIL|g" \
@@ -278,11 +278,19 @@ done
 # ── Final summary ─────────────────────────────────────────────────────────────
 local_done=$(wc -l < "${DONE_FILE}")
 local_fail=$(wc -l < "${FAIL_FILE}")
-log "=== All done: ${local_done} succeeded, ${local_fail} failed ==="
+copyfail_n=$(wc -l < "${COPYFAIL_FILE}" 2>/dev/null || echo 0)
+log "=== All done: ${local_done} succeeded, ${local_fail} failed, ${copyfail_n} result-copy failures ==="
 
-if [[ "${local_fail}" -gt 0 ]]; then
+if [[ "${local_fail}" -gt 0 || "${copyfail_n}" -gt 0 ]]; then
+    details=""
+    if [[ "${local_fail}" -gt 0 ]]; then
+        details+="\nFailed chunks (logs in ${LOG_DIR}):\n$(cat "${FAIL_FILE}")\n"
+    fi
+    if [[ "${copyfail_n}" -gt 0 ]]; then
+        details+="\nChunks processed OK but results could NOT be copied to ${TOMO_RESULTS_MOUNT} (kept on scratch under ${RUN_SCRATCH}):\n$(cat "${COPYFAIL_FILE}")\n"
+    fi
     send_email "Completed with errors — ${TOMO_RUN_ID}" \
-        "Processing complete.\nSucceeded: ${local_done}\nFailed: ${local_fail}\n\nFailed chunks:\n$(cat "${FAIL_FILE}")\n\nResults: <src_dir>/field_retrieval_zpe_results/ (per source directory)\nLogs: ${LOG_DIR}"
+        "Processing complete.\nSucceeded: ${local_done}\nFailed: ${local_fail}\nResult-copy failures: ${copyfail_n}\n${details}\nResults: <src_dir>/field_retrieval_zpe_results/ (per source directory)\nLogs: ${LOG_DIR}"
 else
     send_email "Completed successfully — ${TOMO_RUN_ID}" \
         "All ${local_done} chunks processed successfully.\n\nResults: <src_dir>/field_retrieval_zpe_results/ (per source directory)\nLogs: ${LOG_DIR}"
