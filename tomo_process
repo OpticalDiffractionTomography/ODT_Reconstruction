@@ -339,26 +339,23 @@ EOF
         cat <<EOF
 
 ==================================================================
-   JOB SUBMITTED SUCCESSFULLY  —  ${run_id}
-==================================================================
-
-  Processing now runs in the background on the login node.
-
-  >>> You can close this terminal / disconnect now. <<<
-
-  You will receive exactly two emails: one when processing
-  starts and one when it finishes (no per-chunk emails).
-
   Useful commands:
-    tomo_process --status ${run_id}     check progress
-    tomo_process --list                          list your runs
-    tomo_process --cancel ${run_id}     cancel this run
+    tomo_process --status ${run_id}    check progress
+    tomo_process --list                           list your runs
+    tomo_process --cancel ${run_id}    cancel this run
 
   Results will appear at:
     ${RESULTS_MOUNT}/${input_path}/<subdir>/field_retrieval_zpe_results/
 
   Full log:
     ${run_scratch}/logs/orchestrator.log
+==================================================================
+
+==================================================================
+   JOB SUBMITTED SUCCESSFULLY  —  ${run_id}
+
+   >>> You can close this terminal / disconnect now. <<<
+==================================================================
 
 EOF
     else
