@@ -372,7 +372,7 @@ EOF
     tomo_process --cancel ${run_id}    cancel this run
 
   Results will appear at:
-    ${RESULTS_MOUNT}/${input_path}/<subdir>/field_retrieval_zpe_results/
+    ${RESULTS_MOUNT}/${input_path}/field_retrieval_zpe_results/
 
   Full log:
     ${run_scratch}/logs/orchestrator.log
