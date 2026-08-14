@@ -37,6 +37,11 @@ COPYFAIL_FILE="${STATE_DIR}/copyfail_chunks.txt"
 # write only to stdout here to avoid duplicate lines from tee.
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
 
+fmt_duration() {
+    local s=$1
+    printf '%dh %02dm' $(( s / 3600 )) $(( (s % 3600) / 60 ))
+}
+
 send_email() {
     local subject="$1" body="$2"
     local full_subject="[tomo_process] ${subject}"
@@ -158,10 +163,17 @@ else
     log "Split into ${NCHUNKS} job(s) — auto-sized to ~${max_per_job} samples each"
 
     touch "${ACTIVE_FILE}" "${DONE_FILE}" "${FAIL_FILE}"
+    date +%s > "${STATE_DIR}/run_start_epoch"
     # No "started" email from here — the first chunk job carries SLURM
     # --mail-type=BEGIN and notifies the user when processing actually starts.
 fi
 touch "${COPYFAIL_FILE}"
+# Resumed runs started before duration tracking existed: approximate the run
+# start with the chunk list's creation time so the summary still has a total.
+[[ -f "${STATE_DIR}/run_start_epoch" ]] || stat -c %Y "${CHUNKS_FILE}" > "${STATE_DIR}/run_start_epoch"
+DURATIONS_FILE="${STATE_DIR}/chunk_durations.txt"
+SUBMIT_TIMES_FILE="${STATE_DIR}/submit_times.txt"
+touch "${DURATIONS_FILE}" "${SUBMIT_TIMES_FILE}"
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 count_active() {
@@ -173,6 +185,19 @@ count_active() {
     echo "${n}"
 }
 
+# Elapsed time since a chunk was submitted (queue wait + runtime); appended to
+# DURATIONS_FILE for the final summary email.
+record_chunk_duration() {
+    local cid="$1" status="$2"
+    local sub_epoch dur_str="unknown"
+    sub_epoch=$(awk -F'\t' -v c="${cid}" '$1==c {print $2}' "${SUBMIT_TIMES_FILE}" | tail -1)
+    if [[ -n "${sub_epoch}" ]]; then
+        dur_str=$(fmt_duration $(( $(date +%s) - sub_epoch )))
+    fi
+    echo "${cid}: ${dur_str}${status:+ (${status})}" >> "${DURATIONS_FILE}"
+    echo "${dur_str}"
+}
+
 collect_finished() {
     [[ -s "${ACTIVE_FILE}" ]] || return 0
     local still_active=""
@@ -181,6 +206,9 @@ collect_finished() {
         local fail_marker="${RUN_SCRATCH}/${cid}/FAIL"
 
         if [[ -f "${done_marker}" ]]; then
+            local dur
+            dur=$(record_chunk_duration "${cid}" "")
+            log "Chunk ${cid} finished after ${dur} (queue + run)"
             # Resolve source dir for this chunk from chunks.txt to build result path
             local src_dir
             src_dir=$(awk -F'\t' -v c="${cid}" '$1==c {print $2}' "${CHUNKS_FILE}")
@@ -213,6 +241,7 @@ collect_finished() {
             echo "${cid}" >> "${DONE_FILE}"
 
         elif [[ -f "${fail_marker}" ]]; then
+            record_chunk_duration "${cid}" "failed" > /dev/null
             log "WARNING: Chunk ${cid} FAILED (job ${jid}) — logs: ${LOG_DIR}/${TOMO_RUN_ID}_${cid}.err"
             echo "${cid}" >> "${FAIL_FILE}"
             rm -rf "${RUN_SCRATCH:?}/${cid}"
@@ -273,6 +302,9 @@ submit_chunk() {
     jid=$(sbatch --parsable "${job_script}")
     log "Submitted ${cid} → SLURM job ${jid}"
     echo "${cid}"$'\t'"${jid}" >> "${ACTIVE_FILE}"
+    # Kept separate from ACTIVE_FILE: tomo_process --cancel parses that file
+    # as exactly two tab-separated fields.
+    echo "${cid}"$'\t'"$(date +%s)" >> "${SUBMIT_TIMES_FILE}"
 
     # "Processing started" email: a zero-work job that SLURM holds until the
     # first chunk job actually starts running (--dependency=after). Its name
@@ -345,7 +377,10 @@ done
 local_done=$(wc -l < "${DONE_FILE}")
 local_fail=$(wc -l < "${FAIL_FILE}")
 copyfail_n=$(wc -l < "${COPYFAIL_FILE}" 2>/dev/null || echo 0)
-log "=== All done: ${local_done} succeeded, ${local_fail} failed, ${copyfail_n} result-copy failures ==="
+total_time=$(fmt_duration $(( $(date +%s) - $(cat "${STATE_DIR}/run_start_epoch") )))
+log "=== All done in ${total_time}: ${local_done} succeeded, ${local_fail} failed, ${copyfail_n} result-copy failures ==="
+
+timing="\nTotal time: ${total_time}\n\nPer-chunk times (queue + run):\n$(cat "${DURATIONS_FILE}")\n"
 
 if [[ "${local_fail}" -gt 0 || "${copyfail_n}" -gt 0 ]]; then
     details=""
@@ -355,9 +390,9 @@ if [[ "${local_fail}" -gt 0 || "${copyfail_n}" -gt 0 ]]; then
     if [[ "${copyfail_n}" -gt 0 ]]; then
         details+="\nChunks processed OK but results could NOT be copied to ${TOMO_RESULTS_MOUNT} (kept on scratch under ${RUN_SCRATCH}):\n$(cat "${COPYFAIL_FILE}")\n"
     fi
-    send_email "Completed with errors — ${TOMO_RUN_ID}" \
-        "Processing complete.\nSucceeded: ${local_done}\nFailed: ${local_fail}\nResult-copy failures: ${copyfail_n}\n${details}\nResults: <src_dir>/field_retrieval_zpe_results/ (per source directory)\nLogs: ${LOG_DIR}"
+    send_email "Completed with errors — ${TOMO_RUN_ID} in ${total_time}" \
+        "Processing complete.\nSucceeded: ${local_done}\nFailed: ${local_fail}\nResult-copy failures: ${copyfail_n}\n${timing}${details}\nResults: <src_dir>/field_retrieval_zpe_results/ (per source directory)\nLogs: ${LOG_DIR}"
 else
-    send_email "Completed successfully — ${TOMO_RUN_ID}" \
-        "All ${local_done} chunks processed successfully.\n\nResults: <src_dir>/field_retrieval_zpe_results/ (per source directory)\nLogs: ${LOG_DIR}"
+    send_email "Completed successfully — ${TOMO_RUN_ID} in ${total_time}" \
+        "All ${local_done} chunks processed successfully.\n${timing}\nResults: <src_dir>/field_retrieval_zpe_results/ (per source directory)\nLogs: ${LOG_DIR}"
 fi
