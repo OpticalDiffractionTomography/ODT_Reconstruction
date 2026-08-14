@@ -188,6 +188,16 @@ collect_finished() {
             local dst_dir="${TOMO_RESULTS_MOUNT}/${rel_src}/field_retrieval_zpe_results"
             log "Chunk ${cid} done — copying results to ${dst_dir}/"
             mkdir -p "${dst_dir}"
+            # Every chunk writes the same log/inspection filenames; suffix them
+            # with the chunk id so copies from sibling chunks don't overwrite
+            # each other in the shared results directory.
+            local res_src="${RUN_SCRATCH}/${cid}/data/field_retrieval"
+            local f
+            for f in field_retrieval.log tomogram_reconstruction.log Field_inspection.png; do
+                if [[ -f "${res_src}/${f}" ]]; then
+                    mv "${res_src}/${f}" "${res_src}/${f%.*}_${cid}.${f##*.}"
+                fi
+            done
             # --inplace + plain -r: the results mount is SMB/CIFS, which rejects
             # rsync's mkstemp temp files and chown/chmod/utimes for accounts that
             # don't map to the share owner — write directly, data only.
