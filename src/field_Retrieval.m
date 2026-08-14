@@ -128,31 +128,37 @@ for bgListNum = 1:length(bglist)
             Fimg = Fimg(3:end-2, 3:end-2);
             retAmplitude(:,:,iter) = single(abs(Fimg));
 
-            % phase pipeline — unwrap2 is a MEX that can hang (not error) on
-            % non-finite input, so the input MUST be validated before the call;
-            % a try/catch alone cannot interrupt a hung MEX inside parfor.
+            % phase pipeline — a single bad frame must not abort the whole
+            % chunk: unwrap2 (Phased Array Toolbox Goldstein) can crash on
+            % residue-heavy noisy frames, and non-finite input must not reach
+            % it. Failed frames become NaN and are excluded downstream.
             wrappedPhase = double(angle(Fimg));
-            if any(~isfinite(wrappedPhase(:)))
-                error('Non-finite wrapped phase at iter %d', iter);
-            end
             try
+                if any(~isfinite(wrappedPhase(:)))
+                    error('Non-finite wrapped phase');
+                end
                 p = PhiShift(unwrap2(wrappedPhase));
+                p = phaseCompensation(p, 1);
+                pp = p;
+                tempThresh = p - imtophat(pp, diskSE);
+                tempThresh = mean(tempThresh(:)) + 1.5;
+                p2Mask = (pp > tempThresh(1));
+                p2Mask = bwareaopen(p2Mask, 100);
+                p2Mask = ~imdilate(p2Mask, dilSE);
+                p = phaseCompensation(p, 2, p2Mask);
+                retPhase(:,:,iter) = single(p);
             catch ME
-                fprintf('unwrap2 failed at iter = %d\n', iter);
-                rethrow(ME);
+                fprintf('phase pipeline failed at iter = %d: %s\n', iter, ME.message);
+                retPhase(:,:,iter) = NaN(pSize, pSize, 'single');
             end
-            p = phaseCompensation(p, 1);
-            pp = p;
-            tempThresh = p - imtophat(pp, diskSE);
-            tempThresh = mean(tempThresh(:)) + 1.5;
-            p2Mask = (pp > tempThresh(1));
-            p2Mask = bwareaopen(p2Mask, 100);
-            p2Mask = ~imdilate(p2Mask, dilSE);
-            p = phaseCompensation(p, 2, p2Mask);
-            retPhase(:,:,iter) = single(p);
         end
         f_dx = f_dx_s;
         f_dy = f_dy_s;
+        badFrames = find(squeeze(any(any(isnan(retPhase), 1), 2)));
+        if ~isempty(badFrames)
+            logfn(sprintf('  WARNING: %d frame(s) failed the phase pipeline (NaN, excluded downstream): %s', ...
+                numel(badFrames), num2str(badFrames(:)')));
+        end
         logfn(sprintf('  All %d frames processed.', nFrames));
 
         xSize = ii;
