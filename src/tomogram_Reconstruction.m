@@ -29,11 +29,11 @@ for sampleNum = 1:length(sampleList)
 
     %% Outlier frame detection
     logfn('  Detecting outlier frames...');
+    % Only mean-phase and NaN criteria, matching the original script (its
+    % frame-to-frame diff criterion was computed but never applied).
     excludeFrame = [];
     temp = mean(squeeze(mean(abs(retPhase),1)));
     excludeFrame = [excludeFrame, find(abs(temp)>1.5)];
-    temp = temp-circshift(temp,1);
-    excludeFrame = [excludeFrame, find(abs(temp)>0.1)];
     for kkk = 1:frame
         p2 = squeeze(retPhase(:,:,kkk));
         if sum(isnan(p2(:)))
