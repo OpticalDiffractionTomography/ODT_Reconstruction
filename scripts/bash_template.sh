@@ -74,7 +74,16 @@ run_stage() {
 log "=== Job start: __JOB_NAME__ ==="
 log "Data dir : ${DATA_DIR}"
 
-run_stage field_Retrieval.m
+# Robustness limits for strongly scattering samples (see field_Retrieval.m):
+# frames with more residues than RESIDUE_LIMIT are retried under a per-frame
+# UNWRAP_TIMEOUT, and any single sample is abandoned after SAMPLE_TIME_LIMIT
+# so a few culprits cannot consume the whole walltime.
+RESIDUE_LIMIT="${RESIDUE_LIMIT:-20000}"
+UNWRAP_TIMEOUT="${UNWRAP_TIMEOUT:-120}"
+SAMPLE_TIME_LIMIT="${SAMPLE_TIME_LIMIT:-3600}"
+
+run_stage field_Retrieval.m \
+    "residueLimit=${RESIDUE_LIMIT}; unwrapTimeout=${UNWRAP_TIMEOUT}; sampleTimeLimit=${SAMPLE_TIME_LIMIT}; "
 run_stage tomogram_Reconstruction.m "n_m=${NM}; "
 
 # Signal success — the login-node orchestrator will rsync results from
