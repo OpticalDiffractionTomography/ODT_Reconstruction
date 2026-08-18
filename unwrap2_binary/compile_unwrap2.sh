@@ -33,7 +33,8 @@ mkdir -p "${OUT_DIR}"
 
 module load matlab/R2023a
 
-matlab -nodisplay -nosplash -nodesktop -r "
+BUILD_M="${OUT_DIR}/build_unwrap2.m"
+cat > "${BUILD_M}" <<EOF
 try
     mex('-outdir', '${OUT_DIR}', ...
         '-output', 'unwrap2', ...
@@ -55,7 +56,9 @@ catch err
     exit(1);
 end
 exit(0);
-"
+EOF
+
+matlab -batch "run('${BUILD_M}')"
 
 echo "Build complete. Output in: ${OUT_DIR}/"
 ls -la "${OUT_DIR}"/unwrap2.*
