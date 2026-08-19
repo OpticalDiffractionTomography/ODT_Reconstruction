@@ -52,7 +52,7 @@ cleanup_on_fail() {
 }
 trap cleanup_on_fail ERR
 
-module load matlab/R2026a
+module load matlab/R2023a
 module load cuda/11.6.0
 
 export QT_QPA_PLATFORM=offscreen
