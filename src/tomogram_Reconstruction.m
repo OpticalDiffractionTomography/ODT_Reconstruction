@@ -27,13 +27,16 @@ for sampleNum = 1:length(sampleList)
     f_dy2 = f_dy-mean(f_dy(:));
     original_size = xSize;
 
-    %% Outlier frame detection
+    %% Outlier frame detection (dynamic thresholds: mean + 1 std)
     logfn('  Detecting outlier frames...');
     excludeFrame = [];
     temp = mean(squeeze(mean(abs(retPhase),1)));
-    excludeFrame = [excludeFrame, find(abs(temp)>1.5)];
-    temp = temp-circshift(temp,1);
-    excludeFrame = [excludeFrame, find(abs(temp)>0.1)];
+    red_limit = mean(abs(temp)) + std(abs(temp));
+    excludeFrame = [excludeFrame, find(abs(temp)>red_limit)];
+    % Frame-to-frame diff criterion: diagnostic only (plotted, not applied),
+    % matching the original script.
+    temp1 = temp - circshift(temp,1);
+    green_limit = mean(abs(temp1)) + std(abs(temp1));
     for kkk = 1:frame
         p2 = squeeze(retPhase(:,:,kkk));
         if sum(isnan(p2(:)))
@@ -41,6 +44,7 @@ for sampleNum = 1:length(sampleList)
         end
     end
     excludeFrame = unique(sort(excludeFrame));
+    logfn(sprintf('  red_limit=%.4f | green_limit=%.4f (diagnostic only)', red_limit, green_limit));
     logfn(sprintf('  Excluded %d frame(s): [%s]', length(excludeFrame), num2str(excludeFrame)));
 
     %% Build TomoParam

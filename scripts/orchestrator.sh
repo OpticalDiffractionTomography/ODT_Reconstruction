@@ -9,6 +9,9 @@
 #   TOMO_POLL_INTERVAL, TOMO_SLURM_PARTITION, TOMO_SLURM_GRES,
 #   TOMO_SLURM_CPUS, TOMO_SLURM_MEM, TOMO_SLURM_TIME, TOMO_MINS_PER_SAMPLE,
 #   TOMO_NM
+# Optional:
+#   TOMO_ORCH_PARTITION  cpu partition used for SLURM mail-fallback jobs (default: cpu)
+#   TOMO_SMTP_RELAY      SMTP relay host[:port] for direct email via s-nail
 
 set -euo pipefail
 
@@ -25,11 +28,19 @@ CHUNKS_FILE="${STATE_DIR}/chunks.txt"
 ACTIVE_FILE="${STATE_DIR}/active_jobs.txt"
 DONE_FILE="${STATE_DIR}/done_chunks.txt"
 FAIL_FILE="${STATE_DIR}/failed_chunks.txt"
+# Chunks that processed fine but whose results could not be copied to /mnt;
+# reported in the final summary email instead of a per-chunk email.
+COPYFAIL_FILE="${STATE_DIR}/copyfail_chunks.txt"
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 # stdout/stderr are already redirected to ORCH_LOG by nohup in tomo_process;
 # write only to stdout here to avoid duplicate lines from tee.
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
+
+fmt_duration() {
+    local s=$1
+    printf '%dh %02dm' $(( s / 3600 )) $(( (s % 3600) / 60 ))
+}
 
 send_email() {
     local subject="$1" body="$2"
@@ -43,16 +54,45 @@ send_email() {
             sent=true
         fi
     fi
+    # s-nail can speak SMTP directly to an institute relay — no local MTA
+    # needed on the login node. Full subject + body arrives as a normal email.
+    if [[ "${sent}" == false && -n "${TOMO_SMTP_RELAY:-}" ]] && command -v mail &>/dev/null; then
+        if echo -e "${body}" | mail -s "${full_subject}" \
+                -S mta="smtp://${TOMO_SMTP_RELAY}" \
+                -S from="${TOMO_EMAIL}" \
+                "${TOMO_EMAIL}" &>/dev/null; then
+            sent=true
+        fi
+    fi
     if [[ "${sent}" == false ]] && command -v mail &>/dev/null; then
         if echo -e "${body}" | mail -s "${full_subject}" "${TOMO_EMAIL}" &>/dev/null; then
             sent=true
+        fi
+    fi
+    # Fallback: the login node has no mail relay, but SLURM's own mail
+    # (sent by slurmctld) is known to work on this cluster. Submit a
+    # zero-work job whose NAME carries the message — the user receives
+    # SLURM's END notification with that name in the subject line.
+    if [[ "${sent}" == false ]] && command -v sbatch &>/dev/null; then
+        local jname="tomo_process ${subject}"
+        jname="${jname//—/-}"                       # em-dash → plain dash
+        jname="${jname// /_}"                       # spaces → underscores
+        jname="$(printf '%s' "${jname}" | tr -cd 'A-Za-z0-9._:-' | cut -c1-120)"
+        if sbatch --job-name="${jname}" \
+                  --partition="${TOMO_ORCH_PARTITION:-cpu}" \
+                  --time=00:02:00 --mem=100M \
+                  --output=/dev/null --error=/dev/null \
+                  --mail-type=END --mail-user="${TOMO_EMAIL}" \
+                  --wrap="true" &>/dev/null; then
+            sent=true
+            log "Email sent via SLURM notification job: ${jname}"
         fi
     fi
     # Always write a notification file — readable via --status log
     local note_file="${LOG_DIR}/notification_$(date '+%Y%m%d_%H%M%S').txt"
     printf "Subject: %s\n\n%b\n" "${full_subject}" "${body}" > "${note_file}"
     if [[ "${sent}" == false ]]; then
-        log "NOTE: email not sent (no mail relay); notification saved to ${note_file}"
+        log "NOTE: email not sent (no mail relay, SLURM mail fallback failed); notification saved to ${note_file}"
     fi
 }
 
@@ -123,9 +163,17 @@ else
     log "Split into ${NCHUNKS} job(s) — auto-sized to ~${max_per_job} samples each"
 
     touch "${ACTIVE_FILE}" "${DONE_FILE}" "${FAIL_FILE}"
-    send_email "Started — ${TOMO_RUN_ID}" \
-        "Processing started.\nInput : ${SRC_MOUNT}\nChunks: ${NCHUNKS}\nMax parallel jobs: ${TOMO_MAX_JOBS}"
+    date +%s > "${STATE_DIR}/run_start_epoch"
+    # No "started" email from here — the first chunk job carries SLURM
+    # --mail-type=BEGIN and notifies the user when processing actually starts.
 fi
+touch "${COPYFAIL_FILE}"
+# Resumed runs started before duration tracking existed: approximate the run
+# start with the chunk list's creation time so the summary still has a total.
+[[ -f "${STATE_DIR}/run_start_epoch" ]] || stat -c %Y "${CHUNKS_FILE}" > "${STATE_DIR}/run_start_epoch"
+DURATIONS_FILE="${STATE_DIR}/chunk_durations.txt"
+SUBMIT_TIMES_FILE="${STATE_DIR}/submit_times.txt"
+touch "${DURATIONS_FILE}" "${SUBMIT_TIMES_FILE}"
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 count_active() {
@@ -137,6 +185,19 @@ count_active() {
     echo "${n}"
 }
 
+# Elapsed time since a chunk was submitted (queue wait + runtime); appended to
+# DURATIONS_FILE for the final summary email.
+record_chunk_duration() {
+    local cid="$1" status="$2"
+    local sub_epoch dur_str="unknown"
+    sub_epoch=$(awk -F'\t' -v c="${cid}" '$1==c {print $2}' "${SUBMIT_TIMES_FILE}" | tail -1)
+    if [[ -n "${sub_epoch}" ]]; then
+        dur_str=$(fmt_duration $(( $(date +%s) - sub_epoch )))
+    fi
+    echo "${cid}: ${dur_str}${status:+ (${status})}" >> "${DURATIONS_FILE}"
+    echo "${dur_str}"
+}
+
 collect_finished() {
     [[ -s "${ACTIVE_FILE}" ]] || return 0
     local still_active=""
@@ -145,6 +206,9 @@ collect_finished() {
         local fail_marker="${RUN_SCRATCH}/${cid}/FAIL"
 
         if [[ -f "${done_marker}" ]]; then
+            local dur
+            dur=$(record_chunk_duration "${cid}" "")
+            log "Chunk ${cid} finished after ${dur} (queue + run)"
             # Resolve source dir for this chunk from chunks.txt to build result path
             local src_dir
             src_dir=$(awk -F'\t' -v c="${cid}" '$1==c {print $2}' "${CHUNKS_FILE}")
@@ -152,19 +216,34 @@ collect_finished() {
             local dst_dir="${TOMO_RESULTS_MOUNT}/${rel_src}/field_retrieval_zpe_results"
             log "Chunk ${cid} done — copying results to ${dst_dir}/"
             mkdir -p "${dst_dir}"
+            # Every chunk writes the same log/inspection filenames; suffix them
+            # with the chunk id so copies from sibling chunks don't overwrite
+            # each other in the shared results directory.
+            local res_src="${RUN_SCRATCH}/${cid}/data/field_retrieval"
+            local f
+            for f in field_retrieval.log tomogram_reconstruction.log Field_inspection.png; do
+                if [[ -f "${res_src}/${f}" ]]; then
+                    mv "${res_src}/${f}" "${res_src}/${f%.*}_${cid}.${f##*.}"
+                fi
+            done
+            # --inplace + plain -r: the results mount is SMB/CIFS, which rejects
+            # rsync's mkstemp temp files and chown/chmod/utimes for accounts that
+            # don't map to the share owner — write directly, data only.
             # --ignore-times: always overwrite existing results from a previous
             # run — the size+mtime quick-check is unreliable on network mounts
-            rsync -a --ignore-times "${RUN_SCRATCH}/${cid}/data/field_retrieval/" "${dst_dir}/" \
-                && log "  Results copied for ${cid}" \
-                || log "WARNING: rsync to /mnt failed for ${cid}"
-            rm -rf "${RUN_SCRATCH:?}/${cid}"
+            if rsync -r --inplace --ignore-times "${RUN_SCRATCH}/${cid}/data/field_retrieval/" "${dst_dir}/"; then
+                log "  Results copied for ${cid}"
+                rm -rf "${RUN_SCRATCH:?}/${cid}"
+            else
+                log "WARNING: rsync to /mnt failed for ${cid} — results kept at ${RUN_SCRATCH}/${cid}/data/field_retrieval/"
+                echo "${cid}" >> "${COPYFAIL_FILE}"
+            fi
             echo "${cid}" >> "${DONE_FILE}"
 
         elif [[ -f "${fail_marker}" ]]; then
-            log "WARNING: Chunk ${cid} FAILED (job ${jid})"
+            record_chunk_duration "${cid}" "failed" > /dev/null
+            log "WARNING: Chunk ${cid} FAILED (job ${jid}) — logs: ${LOG_DIR}/${TOMO_RUN_ID}_${cid}.err"
             echo "${cid}" >> "${FAIL_FILE}"
-            send_email "Chunk FAILED — ${TOMO_RUN_ID}" \
-                "Chunk ${cid} (job ${jid}) failed.\nLogs: ${LOG_DIR}/${cid}.err\nScratch kept at: ${RUN_SCRATCH}/${cid}"
             rm -rf "${RUN_SCRATCH:?}/${cid}"
 
         else
@@ -202,11 +281,10 @@ submit_chunk() {
 
     # Generate job script from template; DATA_DIR = chunk_data (flat, no nesting)
     local job_script="${JOBS_DIR}/${cid}.sh"
-    local job_name="tomo_${TOMO_RUN_ID}_${cid}"
+    local job_name="${TOMO_RUN_ID}_${cid}"
     sed \
         -e "s|__JOB_NAME__|${job_name}|g" \
         -e "s|__LOG_DIR__|${LOG_DIR}|g" \
-        -e "s|__EMAIL__|${TOMO_EMAIL}|g" \
         -e "s|__DATA_DIR__|${chunk_data}|g" \
         -e "s|__CHUNK_DONE__|${chunk_scratch}/DONE|g" \
         -e "s|__CHUNK_FAIL__|${chunk_scratch}/FAIL|g" \
@@ -224,6 +302,33 @@ submit_chunk() {
     jid=$(sbatch --parsable "${job_script}")
     log "Submitted ${cid} → SLURM job ${jid}"
     echo "${cid}"$'\t'"${jid}" >> "${ACTIVE_FILE}"
+    # Kept separate from ACTIVE_FILE: tomo_process --cancel parses that file
+    # as exactly two tab-separated fields.
+    echo "${cid}"$'\t'"$(date +%s)" >> "${SUBMIT_TIMES_FILE}"
+
+    # "Processing started" email: a zero-work job that SLURM holds until the
+    # first chunk job actually starts running (--dependency=after). Its name
+    # is what appears in the email subject:
+    #   Slurm Job_id=... Name=tomo_process_Started_-_<run_id> Began
+    # Its job id is saved in state/ so --cancel can kill it (and so a resumed
+    # run doesn't email twice).
+    if [[ ! -f "${STATE_DIR}/start_notify_jid" ]]; then
+        local notify_jid
+        if notify_jid=$(sbatch --parsable \
+                  --job-name="tomo_process_Started_-_${TOMO_RUN_ID}" \
+                  --partition="${TOMO_ORCH_PARTITION:-cpu}" \
+                  --time=00:02:00 --mem=100M \
+                  --output=/dev/null --error=/dev/null \
+                  --dependency="after:${jid}" \
+                  --mail-type=BEGIN --mail-user="${TOMO_EMAIL}" \
+                  --wrap="true" 2>/dev/null); then
+            echo "${notify_jid}" > "${STATE_DIR}/start_notify_jid"
+            log "Start-notification job ${notify_jid} submitted (emails when ${cid} begins)"
+        else
+            log "WARNING: could not submit start-notification job"
+        fi
+    fi
+    return 0
 }
 
 # ── Main loop ─────────────────────────────────────────────────────────────────
@@ -271,12 +376,23 @@ done
 # ── Final summary ─────────────────────────────────────────────────────────────
 local_done=$(wc -l < "${DONE_FILE}")
 local_fail=$(wc -l < "${FAIL_FILE}")
-log "=== All done: ${local_done} succeeded, ${local_fail} failed ==="
+copyfail_n=$(wc -l < "${COPYFAIL_FILE}" 2>/dev/null || echo 0)
+total_time=$(fmt_duration $(( $(date +%s) - $(cat "${STATE_DIR}/run_start_epoch") )))
+log "=== All done in ${total_time}: ${local_done} succeeded, ${local_fail} failed, ${copyfail_n} result-copy failures ==="
 
-if [[ "${local_fail}" -gt 0 ]]; then
-    send_email "Completed with errors — ${TOMO_RUN_ID}" \
-        "Processing complete.\nSucceeded: ${local_done}\nFailed: ${local_fail}\n\nFailed chunks:\n$(cat "${FAIL_FILE}")\n\nResults: <src_dir>/field_retrieval_zpe_results/ (per source directory)\nLogs: ${LOG_DIR}"
+timing="\nTotal time: ${total_time}\n\nPer-chunk times (queue + run):\n$(cat "${DURATIONS_FILE}")\n"
+
+if [[ "${local_fail}" -gt 0 || "${copyfail_n}" -gt 0 ]]; then
+    details=""
+    if [[ "${local_fail}" -gt 0 ]]; then
+        details+="\nFailed chunks (logs in ${LOG_DIR}):\n$(cat "${FAIL_FILE}")\n"
+    fi
+    if [[ "${copyfail_n}" -gt 0 ]]; then
+        details+="\nChunks processed OK but results could NOT be copied to ${TOMO_RESULTS_MOUNT} (kept on scratch under ${RUN_SCRATCH}):\n$(cat "${COPYFAIL_FILE}")\n"
+    fi
+    send_email "Completed with errors — ${TOMO_RUN_ID} in ${total_time}" \
+        "Processing complete.\nSucceeded: ${local_done}\nFailed: ${local_fail}\nResult-copy failures: ${copyfail_n}\n${timing}${details}\nResults: <src_dir>/field_retrieval_zpe_results/ (per source directory)\nLogs: ${LOG_DIR}"
 else
-    send_email "Completed successfully — ${TOMO_RUN_ID}" \
-        "All ${local_done} chunks processed successfully.\n\nResults: <src_dir>/field_retrieval_zpe_results/ (per source directory)\nLogs: ${LOG_DIR}"
+    send_email "Completed successfully — ${TOMO_RUN_ID} in ${total_time}" \
+        "All ${local_done} chunks processed successfully.\n${timing}\nResults: <src_dir>/field_retrieval_zpe_results/ (per source directory)\nLogs: ${LOG_DIR}"
 fi

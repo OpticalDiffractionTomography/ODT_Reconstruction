@@ -27,9 +27,9 @@ sbatch main.sh --data_dir /beegfs/home/ralajan/matlab/<experiment_date>
 field_retrieval_Tomogram_reconstruction.asv
 ```
 
-GPU (CUDA) and MATLAB R2026a are required. External dependencies not in this repo:
-- `mk_ellipse` — creates circular/elliptical binary masks (called in `src/field_Retrieval.m` and `src/ODTReconstruction.m`)
-- `unwrap2` — compiled MEX binary (`.mexw32`) for 2D phase unwrapping; lives in `unwrap/` on the cluster
+GPU (CUDA) and MATLAB R2026a are required. Dependencies:
+- `mk_ellipse` — creates circular/elliptical binary masks ([src/mk_ellipse.m](src/mk_ellipse.m))
+- `unwrap2` — MATLAB's built-in 2D phase unwrapper (Goldstein branch-cut). It can crash on residue-heavy noisy frames; `field_Retrieval.m` catches this per frame and NaN-fills, and such frames are excluded downstream.
 - MATLAB toolboxes required: Image Processing, Parallel Computing (for `gpuArray`/`gather`), Signal Processing (for `xcorr2`)
 
 ## Pipeline Architecture

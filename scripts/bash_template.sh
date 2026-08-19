@@ -6,7 +6,6 @@
 # Placeholders replaced at submission time:
 #   __JOB_NAME__      unique name for this chunk  (e.g. tomo_20260728_chunk003)
 #   __LOG_DIR__       directory for out/err logs
-#   __EMAIL__         user email for SLURM notifications
 #   __DATA_DIR__      chunk staging dir on scratch  ($SCRATCH_ROOT/<run>/<chunk>/data)
 #   __CHUNK_DONE__    touch-file path; orchestrator watches for this
 #   __CHUNK_FAIL__    touch-file path written on failure
@@ -31,8 +30,9 @@
 #SBATCH --cpus-per-task=__CPUS__
 #SBATCH --time=__TIME__
 #SBATCH --mem=__MEM__
-#SBATCH --mail-type=ALL
-#SBATCH --mail-user=__EMAIL__
+# No SLURM mail on chunk jobs — start/finish notifications are sent via
+# dedicated zero-work jobs named after the run id, so the user's email
+# subject shows the run, not an individual chunk.
 
 set -euo pipefail
 
