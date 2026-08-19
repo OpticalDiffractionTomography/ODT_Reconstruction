@@ -46,8 +46,17 @@ bash unwrap2_binary/compile_unwrap2.sh
 
 ## Using the compiled binary
 
-Copy or symlink the resulting `unwrap2.mexa64` into a directory on
-MATLAB's path (e.g. into `src/`, or anywhere covered by
-`addpath(genpath('./src'))` in `main.sh`) so `unwrap2(...)` calls in
-`field_Retrieval.m` resolve to the new build instead of the stale
-`.mexw32` binaries.
+Copy the resulting `unwrap2.mexa64` (not `build_unwrap2.m`, which is just
+the transient build script) into `src/`:
+
+```bash
+cp unwrap2_binary/build/unwrap2.mexa64 src/
+```
+
+The pipeline (`tomo_process` → `scripts/orchestrator.sh` →
+`scripts/main.sh`/`scripts/bash_template.sh`) runs
+`addpath(genpath('<repo>/src'))` before each MATLAB stage, so anything
+under `src/` is picked up automatically — no changes needed in
+`field_Retrieval.m` itself. Its `unwrap2(...)` call resolves to whichever
+`unwrap2.mex*` file is on the path, so this new Linux build replaces the
+old Windows `.mexw32` binaries transparently.
