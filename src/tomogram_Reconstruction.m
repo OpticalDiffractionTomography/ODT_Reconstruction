@@ -29,20 +29,35 @@ for sampleNum = 1:length(sampleList)
 
     %% Outlier frame detection (dynamic thresholds: mean + 1 std)
     logfn('  Detecting outlier frames...');
-    excludeFrame = [];
-    temp = mean(squeeze(mean(abs(retPhase),1)));
-    red_limit = mean(abs(temp)) + std(abs(temp));
-    excludeFrame = [excludeFrame, find(abs(temp)>red_limit)];
-    % Frame-to-frame diff criterion: diagnostic only (plotted, not applied),
-    % matching the original script.
-    temp1 = temp - circshift(temp,1);
-    green_limit = mean(abs(temp1)) + std(abs(temp1));
-    for kkk = 1:frame
-        p2 = squeeze(retPhase(:,:,kkk));
-        if sum(isnan(p2(:)))
-            excludeFrame = [excludeFrame, kkk];
-        end
-    end
+	excludeFrame=[];
+
+	meanAbsPhase = squeeze(mean(abs(retPhase), [1 2], 'omitnan'));
+
+	nanFrames = isnan(meanAbsPhase);
+	validPhase = meanAbsPhase(~nanFrames);
+
+	medPhase = median(validPhase);
+	madPhase = median(abs(validPhase - medPhase));
+
+	%% Threshold for outliers (madFactor might need tuning)
+	madFactor = 3;  
+	red_limit = medPhase + madFactor * madPhase;
+
+	excludeFrame=[excludeFrame, find(abs(meanAbsPhase)>red_limit)];
+
+	frameDiff = meanAbsPhase - circshift(meanAbsPhase,1);
+
+	nanFrames_frameDiff = isnan(frameDiff);
+	valid_frameDiff = frameDiff(~nanFrames_frameDiff);
+
+	med_frameDiff = median(valid_frameDiff);
+	mad_frameDiff = median(abs(valid_frameDiff - med_frameDiff));
+
+	green_limit = med_frameDiff + madFactor * mad_frameDiff;
+	
+	excludeFrame=[excludeFrame,  find(abs(frameDiff)>green_limit)];
+
+
     excludeFrame = unique(sort(excludeFrame));
     logfn(sprintf('  red_limit=%.4f | green_limit=%.4f (diagnostic only)', red_limit, green_limit));
     logfn(sprintf('  Excluded %d frame(s): [%s]', length(excludeFrame), num2str(excludeFrame)));
