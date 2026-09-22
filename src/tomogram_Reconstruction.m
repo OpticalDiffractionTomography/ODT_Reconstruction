@@ -43,7 +43,7 @@ for sampleNum = 1:length(sampleList)
 	madFactor = 3;  
 	red_limit = medPhase + madFactor * madPhase;
 
-	excludeFrame=[excludeFrame, find(abs(meanAbsPhase)>red_limit)];
+    excludeFrame = [excludeFrame(:); find(abs(meanAbsPhase) > red_limit)];
 
 	frameDiff = meanAbsPhase - circshift(meanAbsPhase,1);
 
@@ -55,7 +55,7 @@ for sampleNum = 1:length(sampleList)
 
 	green_limit = med_frameDiff + madFactor * mad_frameDiff;
 	
-	excludeFrame=[excludeFrame,  find(abs(frameDiff)>green_limit)];
+    excludeFrame = [excludeFrame(:); find(abs(frameDiff) > green_limit)];
 
 
     excludeFrame = unique(sort(excludeFrame));
