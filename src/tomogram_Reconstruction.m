@@ -40,10 +40,11 @@ for sampleNum = 1:length(sampleList)
 	madPhase = median(abs(validPhase - medPhase));
 
 	%% Threshold for outliers (madFactor might need tuning)
-	madFactor = 3;  
+	madFactor = 4;  
 	red_limit = medPhase + madFactor * madPhase;
 
-    excludeFrame = [excludeFrame(:); find(abs(meanAbsPhase) > red_limit)];
+    excludeRed = find(abs(meanAbsPhase)>red_limit);
+    excludeFrame=vertcat(excludeFrame(:), excludeRed(:));
 
 	frameDiff = meanAbsPhase - circshift(meanAbsPhase,1);
 
@@ -55,7 +56,8 @@ for sampleNum = 1:length(sampleList)
 
 	green_limit = med_frameDiff + madFactor * mad_frameDiff;
 	
-    excludeFrame = [excludeFrame(:); find(abs(frameDiff) > green_limit)];
+    excludeGreen = find(abs(frameDiff)>green_limit);
+    excludeFrame=vertcat(excludeFrame(:),  excludeGreen(:));
 
 
     excludeFrame = unique(sort(excludeFrame));
