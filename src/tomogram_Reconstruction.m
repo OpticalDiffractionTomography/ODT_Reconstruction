@@ -59,6 +59,12 @@ for sampleNum = 1:length(sampleList)
     excludeGreen = find(abs(frameDiff)>green_limit);
     excludeFrame=vertcat(excludeFrame(:),  excludeGreen(:));
 
+    for kkk = 1:frame
+        p2 = squeeze(retPhase(:,:,kkk));
+        if sum(isnan(p2(:)))
+            excludeFrame = [excludeFrame, kkk];
+        end
+    end
 
     excludeFrame = unique(sort(excludeFrame));
     logfn(sprintf('  red_limit=%.4f | green_limit=%.4f (diagnostic only)', red_limit, green_limit));
