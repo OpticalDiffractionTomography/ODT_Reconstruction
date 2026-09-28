@@ -33,7 +33,7 @@ for bgListNum = 1:length(bglist)
     bgName = bglist(bgListNum).name;
     logfn(sprintf('=== Background %d/%d: %s ===', bgListNum, length(bglist), bgName));
     load(fullfile(spath, bgName));
-    img = double(squeeze(tomogMap(:,:,49)));
+    img = double(squeeze(tomogMap(:,:,round(size(tomogMap,3)/3)-1)));
     img = squeeze(img);
     ii = length(img);
     ZP = ii;
@@ -54,8 +54,8 @@ for bgListNum = 1:length(bglist)
         f_dy(bgNum) = fy(1);
     end
     % Carrier offset taken from frame 49 (matches original script)
-    mi = f_dx(49);
-    mj = f_dy(49);
+    mi=mean(f_dx);
+    mj=mean(f_dy);
     mi = round(mi-ii/2-1); mj = round(mj-ii/2-1);
     logfn(sprintf('Carrier frequency offset (frame 49): mi=%d px, mj=%d px', mi, mj));
 
