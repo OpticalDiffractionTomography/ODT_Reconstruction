@@ -62,7 +62,7 @@ for sampleNum = 1:length(sampleList)
     for kkk = 1:frame
         p2 = squeeze(retPhase(:,:,kkk));
         if sum(isnan(p2(:)))
-            excludeFrame = [excludeFrame, kkk];
+            excludeFrame=vertcat(excludeFrame(:),kkk);
         end
     end
 
