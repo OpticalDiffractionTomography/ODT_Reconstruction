@@ -22,9 +22,15 @@ end
 logfn(sprintf('Parallel pool: %d workers', nWorkers));
 
 %% File discovery
-bglist = dir(fullfile(spath, 'bg*_Tomog.mat'));
+% Background/sample file names vary across experiments (e.g. "bg_Tomog.mat",
+% "bg001_Tomog.mat", "sample001_Tomog.mat", "sample001_TimeLapse_001_Tomog.mat"),
+% so match any "*Tomog.mat" file and classify by its "bg"/"sample" prefix.
+allTomogFiles = dir(fullfile(spath, '*Tomog.mat'));
+isBg     = ~cellfun('isempty', regexpi({allTomogFiles.name}, '^bg.*Tomog\.mat$', 'once'));
+isSample = ~cellfun('isempty', regexpi({allTomogFiles.name}, '^sample.*Tomog\.mat$', 'once'));
+bglist = allTomogFiles(isBg);
 logfn(sprintf('Found %d background file(s).', length(bglist)));
-sampleList = dir(fullfile(spath, 'sample*_Tomog.mat'));
+sampleList = allTomogFiles(isSample);
 logfn(sprintf('Found %d sample file(s).', length(sampleList)));
 
 % Every sample is paired with every background (matches original script);
