@@ -260,14 +260,19 @@ submit_chunk() {
     local chunk_data="${chunk_scratch}/data"
     mkdir -p "${chunk_data}/field_retrieval"
 
-    # Copy background file (one per source directory, always present alongside samples)
-    local bg_src="${src_dir}/bg001_Tomog.mat"
-    if [[ -f "${bg_src}" ]]; then
+    # Copy background file(s) for this source directory. Background file names
+    # vary across experiments (e.g. "bg_Tomog.mat", "bg001_Tomog.mat"), so glob
+    # for any "bg*_Tomog.mat" rather than assuming a fixed name.
+    local bg_found=0
+    for bg_src in "${src_dir}"/bg*_Tomog.mat; do
+        [[ -f "${bg_src}" ]] || continue
         rsync -a "${bg_src}" "${chunk_data}/" \
             || { log "ERROR: rsync failed for background ${bg_src}"; return 1; }
-        log "  Copied: bg001_Tomog.mat"
-    else
-        log "ERROR: background not found: ${bg_src}"
+        log "  Copied: $(basename "${bg_src}")"
+        bg_found=1
+    done
+    if [[ "${bg_found}" -eq 0 ]]; then
+        log "ERROR: no background file (bg*_Tomog.mat) found in: ${src_dir}"
         return 1
     fi
 
