@@ -170,15 +170,35 @@ tomo_process --resume tomo_20260729_143201   # continue from where it stopped
 
 ## Data requirements
 
-Each subdirectory under `--path` must contain:
+The pipeline accepts two kinds of folder layout — use whichever matches how your experiment was recorded.
+
+**1. A single experiment folder** — one background file plus its sample files, all directly inside the folder you pass to `--path`:
 
 ```
-<subdir>/
-  bg001_Tomog.mat          ← single shared background hologram stack
-  sample001_Tomog.mat      ┐
-  sample002_Tomog.mat      ├ one or more sample hologram stacks
-  sample003_Tomog.mat      ┘
+20260715_experiment/
+  bg001_Tomog.mat
+  sample001_Tomog.mat
+  sample002_Tomog.mat
+  sample003_Tomog.mat
 ```
+
+**2. An experiment split into batches** — a `batch01`, `batch02`, ... subfolder for each batch, each with its own background and sample files:
+
+```
+20260715_experiment/
+  batch01/
+    bg001_Tomog.mat
+    sample001_Tomog.mat
+    sample002_Tomog.mat
+  batch02/
+    bg001_Tomog.mat
+    sample001_Tomog.mat
+    sample002_Tomog.mat
+```
+
+In this case, each batch is processed on its own — the samples in `batch01` are only ever combined with the background from `batch01`, never with `batch02`'s background.
+
+File names can vary a little (e.g. `bg_Tomog.mat`, `bg001_Tomog.mat`, or `sample001_TimeLapse_001_Tomog.mat`) — any file name starting with `bg` or `sample` and ending in `Tomog.mat` is recognized.
 
 <details>
 <summary>What the pipeline produces</summary>

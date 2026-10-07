@@ -2,18 +2,33 @@
 % spath is provided by main.sh at invocation
 set(0, 'DefaultFigureVisible', 'off');  % headless: no display on compute nodes
 
-outDir = fullfile(spath, 'field_retrieval');
+%% Batch discovery
+% Mirrors field_Retrieval.m: an experiment may be flat (field_retrieval/
+% directly under spath) or split into batch*/ subdirectories, each with its
+% own field_retrieval/ output from Stage 1. Process each batch independently.
+batchDirs = dir(fullfile(spath, 'batch*'));
+batchDirs = batchDirs([batchDirs.isdir]);
+if isempty(batchDirs)
+    batchPaths = {spath};
+else
+    batchPaths = fullfile(spath, {batchDirs.name});
+end
 
-logFile = fullfile(outDir, 'tomogram_reconstruction.log');
-fid = fopen(logFile, 'w');
-logfn = @(msg) fprintf(fid, '[%s] %s\n', datestr(now,'yyyy-mm-dd HH:MM:SS'), msg);
-logfn('=== tomogram_Reconstruction started ===');
-logfn(sprintf('spath: %s', spath));
+for batchIdx = 1:length(batchPaths)
+    batchPath = batchPaths{batchIdx};
+    outDir = fullfile(batchPath, 'field_retrieval');
 
-sampleList = dir(fullfile(outDir, 'Field*.mat'));
-logfn(sprintf('Found %d Field*.mat file(s).', length(sampleList)));
+    logFile = fullfile(outDir, 'tomogram_reconstruction.log');
+    fid = fopen(logFile, 'w');
+    logfn = @(msg) fprintf(fid, '[%s] %s\n', datestr(now,'yyyy-mm-dd HH:MM:SS'), msg);
+    logfn('=== tomogram_Reconstruction started ===');
+    logfn(sprintf('spath: %s', spath));
+    logfn(sprintf('batch: %s', batchPath));
 
-for sampleNum = 1:length(sampleList)
+    sampleList = dir(fullfile(outDir, 'Field*.mat'));
+    logfn(sprintf('Found %d Field*.mat file(s).', length(sampleList)));
+
+    for sampleNum = 1:length(sampleList)
     sName = sampleList(sampleNum).name;
     logfn(sprintf('--- Processing %d/%d: %s ---', sampleNum, length(sampleList), sName));
 
@@ -135,7 +150,8 @@ for sampleNum = 1:length(sampleList)
     logfn(sprintf('  Saving PNG: %s', pngOut));
     saveTomogramPNG(Reconimg, n_s, pngOut);
     logfn('  PNG saved.');
-end
+    end
 
-logfn('=== tomogram_Reconstruction finished ===');
-fclose(fid);
+    logfn('=== tomogram_Reconstruction finished ===');
+    fclose(fid);
+end
