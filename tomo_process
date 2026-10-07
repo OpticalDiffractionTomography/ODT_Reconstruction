@@ -117,11 +117,18 @@ print_run_line() {
     fail_n=$(wc -l < "${state_dir}/failed_chunks.txt" 2>/dev/null || echo 0)
     total_n=$(wc -l < "${state_dir}/chunks.txt" 2>/dev/null || echo "?")
 
-    status="finished"
-    if [[ -f "${state_dir}/orchestrator.pid" ]]; then
-        local pid
-        pid=$(cat "${state_dir}/orchestrator.pid")
-        kill -0 "${pid}" 2>/dev/null && status="RUNNING (pid ${pid})"
+    local pid=""
+    [[ -f "${state_dir}/orchestrator.pid" ]] && pid=$(cat "${state_dir}/orchestrator.pid")
+
+    if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null; then
+        status="RUNNING (pid ${pid})"
+    elif [[ -f "${state_dir}/cancelled" ]]; then
+        status="CANCELLED"
+    elif [[ "${total_n}" =~ ^[0-9]+$ ]] && (( done_n + fail_n >= total_n )); then
+        status="finished"
+    else
+        # Orchestrator gone but chunks remain — crashed, killed, or node reboot
+        status="STOPPED (incomplete; --resume ${run_id})"
     fi
 
     printf "  %-24s  %4s / %-4s  %6s  %s\n" \
@@ -222,6 +229,9 @@ cmd_cancel() {
     [[ -d "${run_dir}" ]] || die "Run not found: ${run_id}"
 
     local state_dir="${run_dir}/state"
+
+    # Mark the run so --list reports CANCELLED rather than finished
+    date '+%Y-%m-%d %H:%M:%S' > "${state_dir}/cancelled"
 
     local pid_file="${state_dir}/orchestrator.pid"
     if [[ -f "${pid_file}" ]]; then
@@ -428,6 +438,8 @@ cmd_resume() {
     [[ -f "${env_file}" ]] || die "No run_env.sh found in state dir — cannot resume (missing original parameters)"
     # shellcheck source=/dev/null
     source "${env_file}"
+
+    rm -f "${state_dir}/cancelled"
 
     info "Resuming run: ${run_id}"
     info "Orchestrator will re-adopt any active SLURM jobs and continue from saved state"
