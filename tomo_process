@@ -24,6 +24,7 @@ Usage:
   tomo_process --path <relative_path_under_data_mount>
                [--email <email>]  [--max-jobs <N>]
                [--mins-per-sample <N>]  [--nm <float>]
+               [-v|--version <default|alice>]
 
   tomo_process --status <run_id>   Show status of a running/finished run
   tomo_process --resume <run_id>   Resume after login node crash/disconnect
@@ -33,6 +34,7 @@ Usage:
 Examples:
   tomo_process --path "ProjectA/20260715_experiment"
   tomo_process --path "ProjectA/20260715_experiment" --nm 1.340
+  tomo_process --path "ProjectA/20260715_experiment" --version alice
   tomo_process --status tomo_20260729_143201
   tomo_process --list
 
@@ -44,6 +46,9 @@ Notes:
   - Chunk size is auto-derived: floor(walltime / --mins-per-sample).
     Default ${SLURM_TIME} walltime / ${MINS_PER_SAMPLE} min = $(( $(echo ${SLURM_TIME} | awk -F: '{print $1*60+$2}') / MINS_PER_SAMPLE )) samples per job.
   - Override per-sample estimate if your data is faster/slower: --mins-per-sample 10
+  - -v/--version alice: use only the first bg*_Tomog.mat per folder (no _bg_<N>
+    suffix) and write TIFFs as <batchName><NNN>_Tomo.tif in a final export step.
+    Default: every sample paired with every background, Tomogram_<name>.tif.
   - Results: ${RESULTS_MOUNT}/<rel_path>/field_retrieval_zpe_results/
   - Scratch : ${SCRATCH_ROOT}/<run_id>/
   - The orchestrator runs as a nohup background process on the login node.
@@ -282,6 +287,7 @@ cmd_start() {
     local max_jobs="${MAX_PARALLEL_JOBS}"
     local mins_per_sample="${MINS_PER_SAMPLE}"
     local nm="1.337"
+    local version="default"
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -290,12 +296,15 @@ cmd_start() {
             --max-jobs)        max_jobs="$2";        shift 2 ;;
             --mins-per-sample) mins_per_sample="$2"; shift 2 ;;
             --nm)              nm="$2";              shift 2 ;;
+            -v|--version)      version="$2";         shift 2 ;;
             *) die "Unknown argument: $1. Run 'tomo_process --help' for usage." ;;
         esac
     done
 
     [[ -z "${email}" ]]      && die "no notification email set — set EMAIL in config.sh (one-time) or pass --email"
     [[ -z "${input_path}" ]] && die "--path is required"
+    [[ "${version}" == "default" || "${version}" == "alice" ]] \
+        || die "--version must be 'default' or 'alice' (got '${version}')"
 
     local resolved_path
     resolved_path="$(resolve_input_path "${input_path}")" || exit 1
@@ -334,6 +343,7 @@ TOMO_SLURM_TIME="${SLURM_TIME}"
 TOMO_ORCH_PARTITION="${ORCH_PARTITION:-cpu}"
 TOMO_SMTP_RELAY="${SMTP_RELAY:-}"
 TOMO_NM="${nm}"
+TOMO_VERSION="${version}"
 EOF
 
     info "Run ID          : ${run_id}"
@@ -341,6 +351,7 @@ EOF
     info "Max parallel jobs: ${max_jobs}"
     info "Mins per sample : ${mins_per_sample} (chunk size auto-derived from walltime ${SLURM_TIME})"
     info "n_m             : ${nm}"
+    info "Version         : ${version}"
 
     # Launch orchestrator.sh as a nohup background process on the login node.
     # Pass all config via environment variables prefixed TOMO_ to avoid clashes.
@@ -363,6 +374,7 @@ EOF
         TOMO_ORCH_PARTITION="${ORCH_PARTITION:-cpu}" \
         TOMO_SMTP_RELAY="${SMTP_RELAY:-}" \
         TOMO_NM="${nm}" \
+        TOMO_VERSION="${version}" \
         bash "${SCRIPT_DIR}/scripts/orchestrator.sh" \
         >> "${run_scratch}/logs/orchestrator.log" 2>&1 &
 
@@ -463,6 +475,7 @@ cmd_resume() {
         TOMO_ORCH_PARTITION="${TOMO_ORCH_PARTITION:-cpu}" \
         TOMO_SMTP_RELAY="${TOMO_SMTP_RELAY:-${SMTP_RELAY:-}}" \
         TOMO_NM="${TOMO_NM}" \
+        TOMO_VERSION="${TOMO_VERSION:-default}" \
         bash "${SCRIPT_DIR}/scripts/orchestrator.sh" \
         >> "${run_dir}/logs/orchestrator.log" 2>&1 &
 
