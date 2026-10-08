@@ -15,6 +15,9 @@
 #   __MEM__           RAM
 #   __TIME__          walltime
 #   __NM__            medium refractive index (n_m; default 1.337)
+#   __VERSION__       pipeline version: default | alice
+#   __BATCH_NAME__    source dir name, used for alice TIFF names
+#   __TIFF_OFFSET__   samples from the same source dir in earlier chunks
 #
 # NOTE: This job never touches /mnt — all /mnt access happens on the login node
 # via the tomo_process orchestrator (rsync in, rsync out).
@@ -41,7 +44,12 @@ CHUNK_DONE="__CHUNK_DONE__"
 CHUNK_FAIL="__CHUNK_FAIL__"
 REPO_DIR="__REPO_DIR__"
 NM="__NM__"
+VERSION="__VERSION__"
+BATCH_NAME='__BATCH_NAME__'
+TIFF_OFFSET="__TIFF_OFFSET__"
 SRC_DIR="${REPO_DIR}/src"
+# MATLAB char literal: double any single quotes
+BATCH_NAME_M="${BATCH_NAME//\'/\'\'}"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
 
@@ -73,9 +81,10 @@ run_stage() {
 
 log "=== Job start: __JOB_NAME__ ==="
 log "Data dir : ${DATA_DIR}"
+log "Version  : ${VERSION}"
 
-run_stage field_Retrieval.m
-run_stage tomogram_Reconstruction.m "n_m=${NM}; "
+run_stage field_Retrieval.m "pipeline_version='${VERSION}'; "
+run_stage tomogram_Reconstruction.m "n_m=${NM}; pipeline_version='${VERSION}'; batch_name='${BATCH_NAME_M}'; tiff_offset=${TIFF_OFFSET}; "
 
 # Signal success — the login-node orchestrator will rsync results from
 # ${DATA_DIR}/field_retrieval/ back to the results mount.
