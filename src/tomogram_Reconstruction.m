@@ -1,6 +1,9 @@
 %% Tomogram Reconstruction
-% spath is provided by main.sh at invocation
+% spath (and optionally pipelineVersion, n_m) is provided by main.sh at invocation
 set(0, 'DefaultFigureVisible', 'off');  % headless: no display on compute nodes
+
+if ~exist('pipelineVersion', 'var'); pipelineVersion = 'default'; end
+cfg = pipelineConfig(pipelineVersion);
 
 %% Batch discovery
 % Mirrors field_Retrieval.m: an experiment may be flat (field_retrieval/
@@ -24,6 +27,7 @@ for batchIdx = 1:length(batchPaths)
     logfn('=== tomogram_Reconstruction started ===');
     logfn(sprintf('spath: %s', spath));
     logfn(sprintf('batch: %s', batchPath));
+    logfn(sprintf('Pipeline version: %s', cfg.name));
 
     sampleList = dir(fullfile(outDir, 'Field*.mat'));
     logfn(sprintf('Found %d Field*.mat file(s).', length(sampleList)));
@@ -33,7 +37,12 @@ for batchIdx = 1:length(batchPaths)
     logfn(sprintf('--- Processing %d/%d: %s ---', sampleNum, length(sampleList), sName));
 
     logfn(sprintf('  Loading %s...', sName));
+    clear pipelineVersion  % Field files from older runs don't carry it
     load(fullfile(outDir, sName));
+    if exist('pipelineVersion', 'var') && ~strcmp(pipelineVersion, cfg.name)
+        logfn(sprintf('  WARNING: field retrieved with version "%s", reconstructing with "%s"', ...
+            pipelineVersion, cfg.name));
+    end
     [xx, yy, frame] = size(retPhase);
     logfn(sprintf('  Loaded: retPhase size %dx%dx%d', xx, yy, frame));
 
@@ -42,7 +51,7 @@ for batchIdx = 1:length(batchPaths)
     f_dy2 = f_dy-mean(f_dy(:));
     original_size = xSize;
 
-    %% Outlier frame detection (dynamic thresholds: mean + 1 std)
+    %% Outlier frame detection (dynamic thresholds: median + madFactor * MAD)
     logfn('  Detecting outlier frames...');
 	excludeFrame=[];
 
@@ -55,11 +64,8 @@ for batchIdx = 1:length(batchPaths)
 	madPhase = median(abs(validPhase - medPhase));
 
 	%% Threshold for outliers (madFactor might need tuning)
-	madFactor = 4;  
+	madFactor = cfg.madFactor;
 	red_limit = medPhase + madFactor * madPhase;
-
-    excludeRed = find(abs(meanAbsPhase)>red_limit);
-    excludeFrame=vertcat(excludeFrame(:), excludeRed(:));
 
 	frameDiff = meanAbsPhase - circshift(meanAbsPhase,1);
 
@@ -70,7 +76,10 @@ for batchIdx = 1:length(batchPaths)
 	mad_frameDiff = median(abs(valid_frameDiff - med_frameDiff));
 
 	green_limit = med_frameDiff + madFactor * mad_frameDiff;
-	
+
+    excludeRed = find(abs(meanAbsPhase)>red_limit);
+    excludeFrame=vertcat(excludeFrame(:), excludeRed(:));
+
     excludeGreen = find(abs(frameDiff)>green_limit);
     excludeFrame=vertcat(excludeFrame(:),  excludeGreen(:));
 
@@ -144,7 +153,7 @@ for batchIdx = 1:length(batchPaths)
 
     tifOut = fullfile(outDir, strcat(fileName, '.tif'));
     logfn(sprintf('  Saving TIFF: %s', tifOut));
-    saveTomogramTIFF(Reconimg, tifOut);
+    saveTomogramTIFF(Reconimg, tifOut, cfg.tiffFlipLR);
     logfn(sprintf('  TIFF saved (%d slices).', size(Reconimg,3)));
 
     logfn(sprintf('  Saving PNG: %s', pngOut));

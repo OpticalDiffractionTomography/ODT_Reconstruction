@@ -1,13 +1,17 @@
-function saveTomogramTIFF(Reconimg, tifOut)
+function saveTomogramTIFF(Reconimg, tifOut, flipLR)
 % saveTomogramTIFF  Save Reconimg as a multi-page uint16 TIFF (scaled x10000).
+%   flipLR (default true) mirrors each slice left-right before writing.
+    if nargin < 3; flipLR = true; end
     try
         Reconimg_u16 = uint16(real(Reconimg) * 10000);
         if exist(tifOut, 'file'); delete(tifOut); end
         for K = 1:size(Reconimg_u16, 3)
+            slice = Reconimg_u16(:,:,K);
+            if flipLR; slice = fliplr(slice); end
             if K == 1
-                imwrite(fliplr(Reconimg_u16(:,:,K)), tifOut, 'WriteMode', 'overwrite');
+                imwrite(slice, tifOut, 'WriteMode', 'overwrite');
             else
-                imwrite(fliplr(Reconimg_u16(:,:,K)), tifOut, 'WriteMode', 'append');
+                imwrite(slice, tifOut, 'WriteMode', 'append');
             end
         end
     catch ME

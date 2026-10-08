@@ -15,6 +15,7 @@
 #   __MEM__           RAM
 #   __TIME__          walltime
 #   __NM__            medium refractive index (n_m; default 1.337)
+#   __VERSION__       pipeline version (default | alice; see src/pipelineConfig.m)
 #
 # NOTE: This job never touches /mnt — all /mnt access happens on the login node
 # via the tomo_process orchestrator (rsync in, rsync out).
@@ -41,6 +42,7 @@ CHUNK_DONE="__CHUNK_DONE__"
 CHUNK_FAIL="__CHUNK_FAIL__"
 REPO_DIR="__REPO_DIR__"
 NM="__NM__"
+VERSION="__VERSION__"
 SRC_DIR="${REPO_DIR}/src"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
@@ -73,9 +75,10 @@ run_stage() {
 
 log "=== Job start: __JOB_NAME__ ==="
 log "Data dir : ${DATA_DIR}"
+log "Version  : ${VERSION}"
 
-run_stage field_Retrieval.m
-run_stage tomogram_Reconstruction.m "n_m=${NM}; "
+run_stage field_Retrieval.m "pipelineVersion='${VERSION}'; "
+run_stage tomogram_Reconstruction.m "pipelineVersion='${VERSION}'; n_m=${NM}; "
 
 # Signal success — the login-node orchestrator will rsync results from
 # ${DATA_DIR}/field_retrieval/ back to the results mount.

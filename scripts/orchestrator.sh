@@ -12,6 +12,7 @@
 # Optional:
 #   TOMO_ORCH_PARTITION  cpu partition used for SLURM mail-fallback jobs (default: cpu)
 #   TOMO_SMTP_RELAY      SMTP relay host[:port] for direct email via s-nail
+#   TOMO_VERSION         pipeline version: default | alice (default: default)
 
 set -euo pipefail
 
@@ -99,6 +100,7 @@ send_email() {
 log "=== Orchestrator start (pid $$) ==="
 log "Run ID  : ${TOMO_RUN_ID}"
 log "Input   : ${SRC_MOUNT}"
+log "Version : ${TOMO_VERSION:-default}"
 log "Results : ${TOMO_RESULTS_MOUNT}/<rel_path>/field_retrieval_zpe_results/ (per source dir)"
 log "Scratch : ${RUN_SCRATCH}"
 
@@ -300,6 +302,7 @@ submit_chunk() {
         -e "s|__MEM__|${TOMO_SLURM_MEM}|g" \
         -e "s|__TIME__|${TOMO_SLURM_TIME}|g" \
         -e "s|__NM__|${TOMO_NM}|g" \
+        -e "s|__VERSION__|${TOMO_VERSION:-default}|g" \
         "${TOMO_REPO_DIR}/scripts/bash_template.sh" > "${job_script}"
     chmod +x "${job_script}"
 

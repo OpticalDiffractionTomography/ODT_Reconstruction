@@ -1,6 +1,10 @@
 %% Field Retrieval
-% spath is provided by main.sh at invocation
+% spath (and optionally pipelineVersion) is provided by main.sh at invocation
 set(0, 'DefaultFigureVisible', 'off');  % headless: no display on compute nodes
+
+if ~exist('pipelineVersion', 'var'); pipelineVersion = 'default'; end
+cfg = pipelineConfig(pipelineVersion);
+pipelineVersion = cfg.name;
 
 %% Start parallel pool (workers = SLURM CPUs minus 1 for main thread)
 nWorkers = max(1, str2double(getenv('SLURM_CPUS_PER_TASK')) - 1);
@@ -36,6 +40,7 @@ for batchIdx = 1:length(batchPaths)
     logfn('=== field_Retrieval started ===');
     logfn(sprintf('spath: %s', spath));
     logfn(sprintf('batch: %s', batchPath));
+    logfn(sprintf('Pipeline version: %s', cfg.name));
     logfn(sprintf('Parallel pool: %d workers', nWorkers));
 
     %% File discovery
@@ -47,6 +52,10 @@ for batchIdx = 1:length(batchPaths)
     isSample = ~cellfun('isempty', regexpi({allTomogFiles.name}, '^sample.*Tomog\.mat$', 'once'));
     bglist = allTomogFiles(isBg);
     logfn(sprintf('Found %d background file(s).', length(bglist)));
+    if ~cfg.allBackgrounds && length(bglist) > 1
+        logfn(sprintf('Using first background only: %s', bglist(1).name));
+        bglist = bglist(1);
+    end
     sampleList = allTomogFiles(isSample);
     logfn(sprintf('Found %d sample file(s).', length(sampleList)));
 
@@ -76,11 +85,23 @@ for batchIdx = 1:length(batchPaths)
             f_dx(bgNum) = fx(1);
             f_dy(bgNum) = fy(1);
         end
-        % Carrier offset taken from frame 49 (matches original script)
-        mi=mean(f_dx);
-        mj=mean(f_dy);
+        % Carrier offset: mean peak over all bg frames, or the peak of one
+        % fixed bg frame (cfg.carrierFrame)
+        if isempty(cfg.carrierFrame)
+            mi = mean(f_dx);
+            mj = mean(f_dy);
+            carrierSrc = sprintf('mean of %d bg frames', nBg);
+        else
+            if nBg < cfg.carrierFrame
+                error('field_Retrieval:tooFewBgFrames', ...
+                    '%s has %d frames; carrier frame %d required.', bgName, nBg, cfg.carrierFrame);
+            end
+            mi = f_dx(cfg.carrierFrame);
+            mj = f_dy(cfg.carrierFrame);
+            carrierSrc = sprintf('bg frame %d', cfg.carrierFrame);
+        end
         mi = round(mi-ii/2-1); mj = round(mj-ii/2-1);
-        logfn(sprintf('Carrier frequency offset (frame 49): mi=%d px, mj=%d px', mi, mj));
+        logfn(sprintf('Carrier frequency offset (%s): mi=%d px, mj=%d px', carrierSrc, mi, mj));
 
         %% Build demodulation mask and background field stack
         logfn('Building demodulation mask (mk_ellipse)...');
@@ -108,6 +129,10 @@ for batchIdx = 1:length(batchPaths)
 
             logfn(sprintf('  Loading %s...', sName));
             load(fullfile(batchPath, sName));
+            if ~isempty(cfg.resOverride)
+                res = cfg.resOverride;
+                logfn(sprintf('  res overridden: %.15g um', res));
+            end
             nFrames = size(tomogMap,3);
             logfn(sprintf('  Loaded: %d frames, size %dx%d', nFrames, size(tomogMap,1), size(tomogMap,2)));
 
@@ -122,6 +147,7 @@ for batchIdx = 1:length(batchPaths)
             colHi  = round(ii*0.49);
             diskSE = strel('disk', 150);  % created once; safe to broadcast (value object)
             dilSE  = strel('disk', 5);
+            doTilt = cfg.tiltCorrection;
 
             logfn(sprintf('  Launching parfor over %d frames (%d workers)...', nFrames, nWorkers));
             parfor iter = 1:nFrames
@@ -142,11 +168,13 @@ for batchIdx = 1:length(batchPaths)
                 Fimg = Fimg ./ squeeze(Fbg(:,:,iter));
 
                 % residual tilt correction via peak shift
-                FFimg = fftshift(fft2(Fimg));
-                [tX,tY] = find(abs(FFimg) == max(max(abs(FFimg))));
-                tX = tX(1) - size(FFimg,1)/2;
-                tY = tY(1) - size(FFimg,2)/2;
-                Fimg = ifft2(ifftshift(circshift(FFimg, -[tX-1 tY-1])));
+                if doTilt
+                    FFimg = fftshift(fft2(Fimg));
+                    [tX,tY] = find(abs(FFimg) == max(max(abs(FFimg))));
+                    tX = tX(1) - size(FFimg,1)/2;
+                    tY = tY(1) - size(FFimg,2)/2;
+                    Fimg = ifft2(ifftshift(circshift(FFimg, -[tX-1 tY-1])));
+                end
 
                 Fimg = Fimg(3:end-2, 3:end-2);
                 retAmplitude(:,:,iter) = single(abs(Fimg));
@@ -190,7 +218,7 @@ for batchIdx = 1:length(batchPaths)
             matOut = fullfile(outDir, strcat(fileName, '.mat'));
             pngOut  = fullfile(outDir, strcat(fileName, '.png'));
             logfn(sprintf('  Saving: %s', matOut));
-            save(matOut, 'retAmplitude','retPhase','xSize','f_dx','f_dy','NA','lambda','res','ZP');
+            save(matOut, 'retAmplitude','retPhase','xSize','f_dx','f_dy','NA','lambda','res','ZP','pipelineVersion');
             logfn('  MAT file saved. Saving phase overview image...');
             saveFieldPNG(retPhase, nFrames, pngOut);
             logfn(sprintf('  Saved PNG: %s', pngOut));

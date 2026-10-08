@@ -20,6 +20,8 @@ sbatch main.sh --data_dir /beegfs/home/ralajan/matlab/<experiment_date>
 ```
 `main.sh` sets `addpath(genpath('./src'))` and passes `spath` to MATLAB before running each stage script. The stage scripts must **not** contain `clear all`, `addpath`, or a hardcoded `spath` — those are injected by `main.sh`.
 
+**Pipeline versions:** `--version`/`-v` (in `main.sh` and `tomo_process`) selects a processing variant defined in [src/pipelineConfig.m](src/pipelineConfig.m): `default` (cluster) or `alice` (reproduces Alice's PC script, `backup/field_retrieval_Tomogram_reconstruction_Alice.mat`). It is injected into MATLAB as `pipelineVersion`; both stage scripts call `pipelineConfig(pipelineVersion)` and branch on the returned `cfg` fields.
+
 `main.sh` requests 1 RTX GPU, 8 CPUs, 64 GB RAM, 24 h walltime and runs both stages sequentially.
 
 **Legacy monolithic script** (all 4 stages, still the authoritative reference for stitching/visualization):

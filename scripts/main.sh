@@ -15,17 +15,21 @@
 
 # ---------------------------------------------------------------------------
 # Usage:
-#   sbatch main.sh --data_dir /path/to/experiment_data
+#   sbatch main.sh --data_dir /path/to/experiment_data [--version alice]
 #
 # Arguments:
-#   --data_dir <path>   Experiment folder containing batch*/ subdirectories
+#   --data_dir <path>      Experiment folder containing batch*/ subdirectories
+#   --version, -v <name>   Pipeline version: default (cluster) or alice
+#                          (reproduces Alice's PC script); see src/pipelineConfig.m
 # ---------------------------------------------------------------------------
 
 DATA_DIR=""
+VERSION="default"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --data_dir) DATA_DIR="$2"; shift 2 ;;
+        --data_dir)   DATA_DIR="$2"; shift 2 ;;
+        --version|-v) VERSION="$2";  shift 2 ;;
         *) echo "Unknown argument: $1"; exit 1 ;;
     esac
 done
@@ -33,6 +37,12 @@ done
 if [[ -z "$DATA_DIR" ]]; then
     echo "ERROR: --data_dir is required"; exit 1
 fi
+
+case "$VERSION" in
+    default|alice) ;;
+    *) echo "ERROR: unknown --version '$VERSION' (expected: default, alice)"; exit 1 ;;
+esac
+echo "Pipeline version: ${VERSION}"
 
 module load matlab/R2026a
 module load cuda/11.6.0
@@ -51,6 +61,7 @@ run_stage() {
     matlab -batch "\
         addpath(genpath('${SRC_DIR}')); \
         spath='${DATA_DIR}'; \
+        pipelineVersion='${VERSION}'; \
         run('${SRC_DIR}/${stage}')" \
         && echo "[$(date '+%H:%M:%S')] Done:     ${stage}" \
         || { echo "[$(date '+%H:%M:%S')] FAILED:   ${stage}"; exit 1; }
