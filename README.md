@@ -121,6 +121,52 @@ If your experiment folder contains subfolders (e.g. one per batch), each subfold
 
 Run `tomo_process --help` for the full list.
 
+### Example commands
+
+Copy the line that matches what you want, then replace the folder path with your own. Options can be combined in any order.
+
+**Normal run** (most people only need this):
+
+```bash
+tomo_process --path "U:\Members\YourName\20260715_experiment"
+```
+
+**My medium has a different refractive index** (e.g. 1.340):
+
+```bash
+tomo_process --path "U:\Members\YourName\20260715_experiment" --nm 1.340
+```
+
+**Send the email to a different address** (just for this run):
+
+```bash
+tomo_process --path "U:\Members\YourName\20260715_experiment" --email you@lab.de
+```
+
+**Use Alice's variant** (only the first background per folder is used):
+
+```bash
+tomo_process --path "U:\Members\YourName\20260715_experiment" -v alice
+```
+
+**Everything together:**
+
+```bash
+tomo_process --path "U:\Members\YourName\20260715_experiment" --nm 1.340 --email you@lab.de -v alice
+```
+
+**Large dataset — limit how many cluster jobs run at once** (here 3):
+
+```bash
+tomo_process --path "U:\Members\YourName\20260715_experiment" --max-jobs 3
+```
+
+**Samples take longer than usual** (here ~30 minutes each, so jobs are split smaller):
+
+```bash
+tomo_process --path "U:\Members\YourName\20260715_experiment" --mins-per-sample 30
+```
+
 ---
 
 ## Monitoring a run
