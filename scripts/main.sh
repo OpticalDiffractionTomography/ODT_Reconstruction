@@ -15,23 +15,31 @@
 
 # ---------------------------------------------------------------------------
 # Usage:
-#   sbatch main.sh --data_dir /path/to/experiment_data
+#   sbatch main.sh --data_dir /path/to/experiment_data [-v|--version alice]
 #
 # Arguments:
-#   --data_dir <path>   Experiment folder containing batch*/ subdirectories
+#   --data_dir <path>       Experiment folder containing batch*/ subdirectories
+#   -v, --version <name>    default | alice (default: default)
+#                           alice: only the first background per batch, and
+#                           TIFFs written as <batchName><NNN>_Tomo.tif at the end
 # ---------------------------------------------------------------------------
 
 DATA_DIR=""
+VERSION="default"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --data_dir) DATA_DIR="$2"; shift 2 ;;
+        --data_dir)   DATA_DIR="$2"; shift 2 ;;
+        -v|--version) VERSION="$2";  shift 2 ;;
         *) echo "Unknown argument: $1"; exit 1 ;;
     esac
 done
 
 if [[ -z "$DATA_DIR" ]]; then
     echo "ERROR: --data_dir is required"; exit 1
+fi
+if [[ "$VERSION" != "default" && "$VERSION" != "alice" ]]; then
+    echo "ERROR: --version must be 'default' or 'alice' (got '$VERSION')"; exit 1
 fi
 
 module load matlab/R2026a
@@ -51,6 +59,7 @@ run_stage() {
     matlab -batch "\
         addpath(genpath('${SRC_DIR}')); \
         spath='${DATA_DIR}'; \
+        pipeline_version='${VERSION}'; \
         run('${SRC_DIR}/${stage}')" \
         && echo "[$(date '+%H:%M:%S')] Done:     ${stage}" \
         || { echo "[$(date '+%H:%M:%S')] FAILED:   ${stage}"; exit 1; }

@@ -2,6 +2,16 @@
 % spath is provided by main.sh at invocation
 set(0, 'DefaultFigureVisible', 'off');  % headless: no display on compute nodes
 
+% pipeline_version may be injected by main.sh / bash_template.sh:
+%   'default' — pair every sample with every background (outputs suffixed _bg_<N>)
+%   'alice'   — use only the first background per batch, no _bg_<N> suffix
+if ~exist('pipeline_version', 'var'); pipeline_version = 'default'; end
+pipeline_version = lower(pipeline_version);
+if ~any(strcmp(pipeline_version, {'default', 'alice'}))
+    error('Unknown pipeline_version ''%s'' (expected ''default'' or ''alice'')', pipeline_version);
+end
+isAlice = strcmp(pipeline_version, 'alice');
+
 %% Start parallel pool (workers = SLURM CPUs minus 1 for main thread)
 nWorkers = max(1, str2double(getenv('SLURM_CPUS_PER_TASK')) - 1);
 if isnan(nWorkers) || nWorkers < 1, nWorkers = 4; end
@@ -37,6 +47,7 @@ for batchIdx = 1:length(batchPaths)
     logfn(sprintf('spath: %s', spath));
     logfn(sprintf('batch: %s', batchPath));
     logfn(sprintf('Parallel pool: %d workers', nWorkers));
+    logfn(sprintf('Pipeline version: %s', pipeline_version));
 
     %% File discovery
     % Background/sample file names vary across experiments (e.g. "bg_Tomog.mat",
@@ -50,8 +61,13 @@ for batchIdx = 1:length(batchPaths)
     sampleList = allTomogFiles(isSample);
     logfn(sprintf('Found %d sample file(s).', length(sampleList)));
 
-    % Every sample is paired with every background within the same batch
-    % (matches original script); outputs are suffixed _bg_<N>.
+    % Default: every sample is paired with every background within the same
+    % batch; outputs are suffixed _bg_<N>. Alice: only the first background.
+    if isAlice && length(bglist) > 1
+        logfn(sprintf('Alice mode: using only the first background (%s); ignoring %d other(s).', ...
+            bglist(1).name, length(bglist)-1));
+        bglist = bglist(1);
+    end
     for bgListNum = 1:length(bglist)
         bgName = bglist(bgListNum).name;
         logfn(sprintf('=== Background %d/%d: %s ===', bgListNum, length(bglist), bgName));
@@ -186,7 +202,11 @@ for batchIdx = 1:length(batchPaths)
 
             xSize = ii;
             [~, baseName, ~] = fileparts(sName);
-            fileName = strcat('Field_', baseName, '_bg_', num2str(bgListNum));
+            if isAlice
+                fileName = strcat('Field_', baseName);
+            else
+                fileName = strcat('Field_', baseName, '_bg_', num2str(bgListNum));
+            end
             matOut = fullfile(outDir, strcat(fileName, '.mat'));
             pngOut  = fullfile(outDir, strcat(fileName, '.png'));
             logfn(sprintf('  Saving: %s', matOut));

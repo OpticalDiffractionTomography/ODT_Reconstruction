@@ -117,6 +117,7 @@ If your experiment folder contains subfolders (e.g. one per batch), each subfold
 | `--email you@lab.de` | Notification email for this run only | `EMAIL` from `config.sh` |
 | `--max-jobs 3` | Parallel SLURM jobs | `5` |
 | `--mins-per-sample 10` | Time estimate per sample (used to size jobs) | `15` |
+| `-v alice` / `--version alice` | Alice's variant: only the first `bg*_Tomog.mat` per folder is used (outputs have no `_bg_<N>` suffix), and TIFFs are written in a final export step as `<batchName><NNN>_Tomo.tif`. Everything else is identical to `default`. See [Backgrounds and pipeline versions](#backgrounds-and-pipeline-versions---version). | `default` |
 
 Run `tomo_process --help` for the full list.
 
@@ -200,22 +201,79 @@ In this case, each batch is processed on its own — the samples in `batch01` ar
 
 File names can vary a little (e.g. `bg_Tomog.mat`, `bg001_Tomog.mat`, or `sample001_TimeLapse_001_Tomog.mat`) — any file name starting with `bg` or `sample` and ending in `Tomog.mat` is recognized.
 
+### Backgrounds and pipeline versions (`--version`)
+
+How backgrounds are paired with samples, and how the TIFFs are named, depends on `--version` (`-v`). Everything else (phase retrieval, outlier-frame detection, reconstruction, `.mat`/`.png` outputs) is identical in both versions.
+
+| | `default` | `alice` (`-v alice`) |
+|---|---|---|
+| Backgrounds used | **Every** `bg*Tomog.mat` in the folder | Only the **first** `bg*Tomog.mat` in the folder (alphabetical order); the others are ignored and listed in the log |
+| Samples processed | Once per background | Once |
+| `_bg_<N>` suffix on outputs | Yes | No |
+| When TIFFs are written | Right after each sample is reconstructed | In one final export step, after all samples in the folder are reconstructed |
+| TIFF name | `Tomogram_Field_<sample>_bg_<N>.tif` | `<folderName><NNN>_Tomo.tif` |
+
+Example — a folder with two backgrounds and two samples:
+
+```
+batch01/
+  bg001_Tomog.mat
+  bg002_Tomog.mat
+  sample001_Tomog.mat
+  sample002_Tomog.mat
+```
+
+```
+default                                alice
+───────                                ─────
+bg001 → sample001, sample002           bg001 → sample001, sample002
+bg002 → sample001, sample002           (bg002 ignored)
+= 4 reconstructions                    = 2 reconstructions
+```
+
+Notes:
+
+- **Batches stay separate in both versions.** A sample is only ever combined with a background from its own folder.
+- **Frame matching.** Each sample frame is divided by the frame with the same index in the background stack, in both versions.
+- **"First" background.** This is the first in MATLAB's alphabetical (case-sensitive) order, so `bg001_Tomog.mat` comes before `bg_Tomog.mat`. If the folder has only one background, the two versions pair samples identically and differ only in file names.
+- **Alice TIFF numbering.** `<folderName>` is the name of the folder that holds the sample files. `<NNN>` is the sample's position (001, 002, ...) in alphabetical order within that folder. A large folder can be split over several cluster jobs; the numbering continues across those jobs, so TIFFs never overwrite each other.
+- **TIFF format** is the same in both versions: multi-page uint16, RI × 10000, each slice mirrored left–right.
+
 <details>
 <summary>What the pipeline produces</summary>
 
-For each subdirectory, results are written to `$RESULTS_MOUNT/<rel_path>/field_retrieval_zpe_results/`:
+For each subdirectory, results are written to `$RESULTS_MOUNT/<rel_path>/field_retrieval_zpe_results/`.
+
+**`default`** (one set per sample *and* background, `_bg_<N>` = background number):
 
 ```
 field_retrieval_zpe_results/
-  Field_sample001_Tomog.mat    # retPhase, retAmplitude, NA, lambda, res, ZP, f_dx, f_dy
-  Field_sample001_Tomog.png    # diagnostic phase overview image
-  Tomogram_Field_sample001.mat # Reconimg (3D RI volume), res3, res4, excludeFrame
-  Tomogram_Field_sample001.tif # multi-page uint16 TIFF (values × 10000)
-  Tomogram_Field_sample001.png # diagnostic orthogonal slice image
-  Field_inspection.png         # mean phase and frame-diff curves across all samples
-  field_retrieval.log          # Stage 1 log
-  tomogram_reconstruction.log  # Stage 2 log
+  Field_sample001_Tomog_bg_1.mat            # retPhase, retAmplitude, NA, lambda, res, ZP, f_dx, f_dy
+  Field_sample001_Tomog_bg_1.png            # diagnostic phase overview image
+  Tomogram_Field_sample001_Tomog_bg_1.mat   # Reconimg (3D RI volume), res3, res4, lambda, excludeFrame
+  Tomogram_Field_sample001_Tomog_bg_1.tif   # multi-page uint16 TIFF (values × 10000)
+  Tomogram_Field_sample001_Tomog_bg_1.png   # diagnostic orthogonal slice image
+  Field_inspection_chunk0000.png            # mean phase and frame-diff curves across all samples
+  field_retrieval_chunk0000.log             # Stage 1 log
+  tomogram_reconstruction_chunk0000.log     # Stage 2 log
 ```
+
+**`alice`** (one set per sample, no `_bg_<N>`; TIFFs named after the folder):
+
+```
+field_retrieval_zpe_results/
+  Field_sample001_Tomog.mat
+  Field_sample001_Tomog.png
+  Tomogram_Field_sample001_Tomog.mat
+  Tomogram_Field_sample001_Tomog.png
+  batch01001_Tomo.tif                       # <folderName><NNN>_Tomo.tif
+  batch01002_Tomo.tif
+  Field_inspection_chunk0000.png
+  field_retrieval_chunk0000.log
+  tomogram_reconstruction_chunk0000.log
+```
+
+The `_chunkNNNN` suffix on logs and the inspection plot identifies the cluster job that produced them. When a folder is split over several jobs, each job writes its own copy.
 
 </details>
 
@@ -272,7 +330,10 @@ If your dataset fits within scratch space and you want to submit directly withou
 
 ```bash
 sbatch scripts/main.sh --data_dir /path/to/experiment_data
+sbatch scripts/main.sh --data_dir /path/to/experiment_data -v alice   # Alice's variant
 ```
+
+`--data_dir` may be a single experiment folder or one containing `batch*/` subfolders. Results go to `field_retrieval/` inside each folder, and logs and the inspection plot have no `_chunkNNNN` suffix. In `alice` mode the TIFF numbering starts at 001 in each folder.
 
 `scripts/main.sh` runs both stages sequentially on one GPU node. It does not handle copying from/to the network mounts — you must do that manually.
 

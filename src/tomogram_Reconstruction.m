@@ -2,6 +2,23 @@
 % spath is provided by main.sh at invocation
 set(0, 'DefaultFigureVisible', 'off');  % headless: no display on compute nodes
 
+% Optional variables injected by main.sh / bash_template.sh:
+%   pipeline_version  'default' — TIFF saved right after each reconstruction
+%                                 as Tomogram_<name>.tif
+%                     'alice'   — TIFFs written in a final per-batch section as
+%                                 <batchName><NNN>_Tomo.tif
+%   batch_name        (alice) batch name for a flat spath; defaults to the
+%                     spath folder name (the orchestrator passes the source dir)
+%   tiff_offset       (alice) added to NNN, so chunks of the same source dir
+%                     continue the numbering instead of restarting at 001
+if ~exist('pipeline_version', 'var'); pipeline_version = 'default'; end
+pipeline_version = lower(pipeline_version);
+if ~any(strcmp(pipeline_version, {'default', 'alice'}))
+    error('Unknown pipeline_version ''%s'' (expected ''default'' or ''alice'')', pipeline_version);
+end
+isAlice = strcmp(pipeline_version, 'alice');
+if ~exist('tiff_offset', 'var'); tiff_offset = 0; end
+
 %% Batch discovery
 % Mirrors field_Retrieval.m: an experiment may be flat (field_retrieval/
 % directly under spath) or split into batch*/ subdirectories, each with its
@@ -24,9 +41,11 @@ for batchIdx = 1:length(batchPaths)
     logfn('=== tomogram_Reconstruction started ===');
     logfn(sprintf('spath: %s', spath));
     logfn(sprintf('batch: %s', batchPath));
+    logfn(sprintf('Pipeline version: %s', pipeline_version));
 
     sampleList = dir(fullfile(outDir, 'Field*.mat'));
     logfn(sprintf('Found %d Field*.mat file(s).', length(sampleList)));
+    tomoFiles = {};  % tomograms written in this run (alice TIFF export)
 
     for sampleNum = 1:length(sampleList)
     sName = sampleList(sampleNum).name;
@@ -141,15 +160,37 @@ for batchIdx = 1:length(batchPaths)
     logfn(sprintf('  Saving: %s', matOut));
     save(matOut, 'Reconimg','res3','res4','lambda','excludeFrame');
     logfn('  MAT file saved.');
+    tomoFiles{end+1} = matOut; %#ok<SAGROW>
 
-    tifOut = fullfile(outDir, strcat(fileName, '.tif'));
-    logfn(sprintf('  Saving TIFF: %s', tifOut));
-    saveTomogramTIFF(Reconimg, tifOut);
-    logfn(sprintf('  TIFF saved (%d slices).', size(Reconimg,3)));
+    if ~isAlice
+        tifOut = fullfile(outDir, strcat(fileName, '.tif'));
+        logfn(sprintf('  Saving TIFF: %s', tifOut));
+        saveTomogramTIFF(Reconimg, tifOut);
+        logfn(sprintf('  TIFF saved (%d slices).', size(Reconimg,3)));
+    end
 
     logfn(sprintf('  Saving PNG: %s', pngOut));
     saveTomogramPNG(Reconimg, n_s, pngOut);
     logfn('  PNG saved.');
+    end
+
+    %% TIFF export (alice): one pass over this batch's tomograms after all
+    % reconstructions, named <batchName><NNN>_Tomo.tif in tomogram name order.
+    if isAlice
+        if isempty(batchDirs) && exist('batch_name', 'var') && ~isempty(batch_name)
+            tiffBatchName = batch_name;
+        else
+            [~, tiffBatchName] = fileparts(batchPath);
+        end
+        tomoFiles = sort(tomoFiles);
+        logfn(sprintf('TIFF export: %d tomogram(s), batch name "%s", numbering from %03d', ...
+            length(tomoFiles), tiffBatchName, tiff_offset+1));
+        for tomoNum = 1:length(tomoFiles)
+            S = load(tomoFiles{tomoNum}, 'Reconimg');
+            tifOut = fullfile(outDir, strcat(tiffBatchName, sprintf('%03d', tiff_offset+tomoNum), '_Tomo.tif'));
+            logfn(sprintf('  Saving TIFF: %s', tifOut));
+            saveTomogramTIFF(S.Reconimg, tifOut);
+        end
     end
 
     logfn('=== tomogram_Reconstruction finished ===');

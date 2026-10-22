@@ -12,8 +12,11 @@
 # Optional:
 #   TOMO_ORCH_PARTITION  cpu partition used for SLURM mail-fallback jobs (default: cpu)
 #   TOMO_SMTP_RELAY      SMTP relay host[:port] for direct email via s-nail
+#   TOMO_VERSION         pipeline version: default | alice (default: default)
 
 set -euo pipefail
+
+TOMO_VERSION="${TOMO_VERSION:-default}"
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 RUN_SCRATCH="${TOMO_SCRATCH_ROOT}/${TOMO_RUN_ID}"
@@ -101,6 +104,7 @@ log "Run ID  : ${TOMO_RUN_ID}"
 log "Input   : ${SRC_MOUNT}"
 log "Results : ${TOMO_RESULTS_MOUNT}/<rel_path>/field_retrieval_zpe_results/ (per source dir)"
 log "Scratch : ${RUN_SCRATCH}"
+log "Version : ${TOMO_VERSION}"
 
 # ── Discover and chunk files (skipped on resume — chunks.txt already exists) ──
 # chunks.txt format: chunk_id <TAB> src_dir <TAB> file1,file2,...
@@ -284,6 +288,19 @@ submit_chunk() {
     done
     log "  Copied ${#flist[@]} sample files for ${cid}"
 
+    # Alice-version TIFFs are named <batchName><NNN>_Tomo.tif. The chunk's data
+    # dir is a flat staging folder, so pass the source dir's name as the batch
+    # name, plus the number of samples from this source dir in earlier chunks
+    # so NNN continues across chunks instead of restarting (and overwriting
+    # sibling chunks' TIFFs in the shared results dir).
+    local batch_name tiff_offset
+    batch_name="$(basename "${src_dir}")"
+    tiff_offset=$(awk -F'\t' -v c="${cid}" -v d="${src_dir}" \
+        '$1==c {exit} $2==d {n+=split($3, a, ",")} END {print n+0}' "${CHUNKS_FILE}")
+    # Escape for the bash single-quoted assignment in the template, then for sed
+    batch_name="${batch_name//\'/\'\\\'\'}"
+    batch_name="$(printf '%s' "${batch_name}" | sed -e 's/[\\&|]/\\&/g')"
+
     # Generate job script from template; DATA_DIR = chunk_data (flat, no nesting)
     local job_script="${JOBS_DIR}/${cid}.sh"
     local job_name="${TOMO_RUN_ID}_${cid}"
@@ -300,6 +317,9 @@ submit_chunk() {
         -e "s|__MEM__|${TOMO_SLURM_MEM}|g" \
         -e "s|__TIME__|${TOMO_SLURM_TIME}|g" \
         -e "s|__NM__|${TOMO_NM}|g" \
+        -e "s|__VERSION__|${TOMO_VERSION}|g" \
+        -e "s|__BATCH_NAME__|${batch_name}|g" \
+        -e "s|__TIFF_OFFSET__|${tiff_offset}|g" \
         "${TOMO_REPO_DIR}/scripts/bash_template.sh" > "${job_script}"
     chmod +x "${job_script}"
 
