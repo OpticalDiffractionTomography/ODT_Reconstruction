@@ -34,6 +34,8 @@ FAIL_FILE="${STATE_DIR}/failed_chunks.txt"
 # Chunks that processed fine but whose results could not be copied to /mnt;
 # reported in the final summary email instead of a per-chunk email.
 COPYFAIL_FILE="${STATE_DIR}/copyfail_chunks.txt"
+# Input files the job skipped as unreadable/corrupt: chunk <TAB> file <TAB> reason
+SKIPPED_FILE="${STATE_DIR}/skipped_files.txt"
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 # stdout/stderr are already redirected to ORCH_LOG by nohup in tomo_process;
@@ -171,7 +173,7 @@ else
     # No "started" email from here — the first chunk job carries SLURM
     # --mail-type=BEGIN and notifies the user when processing actually starts.
 fi
-touch "${COPYFAIL_FILE}"
+touch "${COPYFAIL_FILE}" "${SKIPPED_FILE}"
 # Resumed runs started before duration tracking existed: approximate the run
 # start with the chunk list's creation time so the summary still has a total.
 [[ -f "${STATE_DIR}/run_start_epoch" ]] || stat -c %Y "${CHUNKS_FILE}" > "${STATE_DIR}/run_start_epoch"
@@ -202,6 +204,53 @@ record_chunk_duration() {
     echo "${dur_str}"
 }
 
+# Copy a chunk's results to the results mount. Used for finished chunks and, to
+# salvage already-processed samples, for failed ones. Returns non-zero (and
+# keeps the scratch dir) if the copy fails. Never aborts the caller.
+copy_chunk_results() {
+    local cid="$1"
+    local src_dir
+    src_dir=$(awk -F'\t' -v c="${cid}" '$1==c {print $2}' "${CHUNKS_FILE}")
+    local rel_src="${src_dir#${TOMO_DATA_MOUNT}/}"
+    local dst_dir="${TOMO_RESULTS_MOUNT}/${rel_src}/field_retrieval_zpe_results"
+    local res_src="${RUN_SCRATCH}/${cid}/data/field_retrieval"
+
+    if [[ -z "$(ls -A "${res_src}" 2>/dev/null)" ]]; then
+        log "  No results to copy for ${cid}"
+        return 0
+    fi
+    log "Copying ${cid} results to ${dst_dir}/"
+    mkdir -p "${dst_dir}"
+    # Every chunk writes the same log/inspection filenames; suffix them
+    # with the chunk id so copies from sibling chunks don't overwrite
+    # each other in the shared results directory.
+    local f
+    for f in field_retrieval.log tomogram_reconstruction.log Field_inspection.png skipped_files.txt; do
+        if [[ -f "${res_src}/${f}" ]]; then
+            mv "${res_src}/${f}" "${res_src}/${f%.*}_${cid}.${f##*.}"
+        fi
+    done
+    # Input files the job could not read (corrupt MAT etc.) — report them
+    local skipped="${res_src}/skipped_files_${cid}.txt"
+    if [[ -s "${skipped}" ]]; then
+        while IFS=$'\t' read -r sname sstage sreason; do
+            log "  WARNING: ${cid} skipped ${sname} (${sstage}): ${sreason}"
+            echo "${cid}"$'\t'"${sname}"$'\t'"${sreason}" >> "${SKIPPED_FILE}"
+        done < "${skipped}"
+    fi
+    # --inplace + plain -r: the results mount is SMB/CIFS, which rejects
+    # rsync's mkstemp temp files and chown/chmod/utimes for accounts that
+    # don't map to the share owner — write directly, data only.
+    # --ignore-times: always overwrite existing results from a previous
+    # run — the size+mtime quick-check is unreliable on network mounts
+    if rsync -r --inplace --ignore-times "${res_src}/" "${dst_dir}/"; then
+        log "  Results copied for ${cid}"
+        return 0
+    fi
+    log "WARNING: rsync to /mnt failed for ${cid} — results kept at ${res_src}/"
+    return 1
+}
+
 collect_finished() {
     [[ -s "${ACTIVE_FILE}" ]] || return 0
     local still_active=""
@@ -213,33 +262,9 @@ collect_finished() {
             local dur
             dur=$(record_chunk_duration "${cid}" "")
             log "Chunk ${cid} finished after ${dur} (queue + run)"
-            # Resolve source dir for this chunk from chunks.txt to build result path
-            local src_dir
-            src_dir=$(awk -F'\t' -v c="${cid}" '$1==c {print $2}' "${CHUNKS_FILE}")
-            local rel_src="${src_dir#${TOMO_DATA_MOUNT}/}"
-            local dst_dir="${TOMO_RESULTS_MOUNT}/${rel_src}/field_retrieval_zpe_results"
-            log "Chunk ${cid} done — copying results to ${dst_dir}/"
-            mkdir -p "${dst_dir}"
-            # Every chunk writes the same log/inspection filenames; suffix them
-            # with the chunk id so copies from sibling chunks don't overwrite
-            # each other in the shared results directory.
-            local res_src="${RUN_SCRATCH}/${cid}/data/field_retrieval"
-            local f
-            for f in field_retrieval.log tomogram_reconstruction.log Field_inspection.png; do
-                if [[ -f "${res_src}/${f}" ]]; then
-                    mv "${res_src}/${f}" "${res_src}/${f%.*}_${cid}.${f##*.}"
-                fi
-            done
-            # --inplace + plain -r: the results mount is SMB/CIFS, which rejects
-            # rsync's mkstemp temp files and chown/chmod/utimes for accounts that
-            # don't map to the share owner — write directly, data only.
-            # --ignore-times: always overwrite existing results from a previous
-            # run — the size+mtime quick-check is unreliable on network mounts
-            if rsync -r --inplace --ignore-times "${RUN_SCRATCH}/${cid}/data/field_retrieval/" "${dst_dir}/"; then
-                log "  Results copied for ${cid}"
+            if copy_chunk_results "${cid}"; then
                 rm -rf "${RUN_SCRATCH:?}/${cid}"
             else
-                log "WARNING: rsync to /mnt failed for ${cid} — results kept at ${RUN_SCRATCH}/${cid}/data/field_retrieval/"
                 echo "${cid}" >> "${COPYFAIL_FILE}"
             fi
             echo "${cid}" >> "${DONE_FILE}"
@@ -247,8 +272,14 @@ collect_finished() {
         elif [[ -f "${fail_marker}" ]]; then
             record_chunk_duration "${cid}" "failed" > /dev/null
             log "WARNING: Chunk ${cid} FAILED (job ${jid}) — logs: ${LOG_DIR}/${TOMO_RUN_ID}_${cid}.err"
+            # Salvage: samples processed before the failure are still valid
+            # outputs — don't throw them away along with the failed one.
+            if copy_chunk_results "${cid}"; then
+                rm -rf "${RUN_SCRATCH:?}/${cid}"
+            else
+                echo "${cid}" >> "${COPYFAIL_FILE}"
+            fi
             echo "${cid}" >> "${FAIL_FILE}"
-            rm -rf "${RUN_SCRATCH:?}/${cid}"
 
         else
             still_active+="${cid}"$'\t'"${jid}"$'\n'
@@ -282,11 +313,23 @@ submit_chunk() {
 
     # Copy sample files for this chunk (all from the same source directory)
     IFS=',' read -ra flist <<< "${files_csv}"
+    # A sample that cannot be staged (unreadable/corrupt on the source) is
+    # skipped and reported; it must not block the rest of the chunk.
+    local staged=0
     for fpath in "${flist[@]}"; do
-        rsync -a "${fpath}" "${chunk_data}/" \
-            || { log "ERROR: rsync failed for ${fpath}"; return 1; }
+        if rsync -a "${fpath}" "${chunk_data}/"; then
+            staged=$(( staged + 1 ))
+        else
+            log "WARNING: rsync failed for ${fpath} — skipping this file"
+            rm -f "${chunk_data}/$(basename "${fpath}")"
+            echo "${cid}"$'\t'"$(basename "${fpath}")"$'\t'"could not be copied from source" >> "${SKIPPED_FILE}"
+        fi
     done
-    log "  Copied ${#flist[@]} sample files for ${cid}"
+    if [[ "${staged}" -eq 0 ]]; then
+        log "ERROR: no sample file could be staged for ${cid}"
+        return 1
+    fi
+    log "  Copied ${staged}/${#flist[@]} sample files for ${cid}"
 
     # Alice-version TIFFs are named <batchName><NNN>_Tomo.tif. The chunk's data
     # dir is a flat staging folder, so pass the source dir's name as the batch
@@ -407,7 +450,12 @@ log "=== All done in ${total_time}: ${local_done} succeeded, ${local_fail} faile
 
 timing="\nTotal time: ${total_time}\n\nPer-chunk times (queue + run):\n$(cat "${DURATIONS_FILE}")\n"
 
-if [[ "${local_fail}" -gt 0 || "${copyfail_n}" -gt 0 ]]; then
+skipped_n=$(wc -l < "${SKIPPED_FILE}")
+if [[ "${skipped_n}" -gt 0 ]]; then
+    timing+="\nSkipped ${skipped_n} unreadable/corrupt input file(s) (all other samples were processed and copied):\n$(awk -F'\t' '{print "  " $1 ": " $2 " — " $3}' "${SKIPPED_FILE}")\n"
+fi
+
+if [[ "${local_fail}" -gt 0 || "${copyfail_n}" -gt 0 || "${skipped_n}" -gt 0 ]]; then
     details=""
     if [[ "${local_fail}" -gt 0 ]]; then
         details+="\nFailed chunks (logs in ${LOG_DIR}):\n$(cat "${FAIL_FILE}")\n"
@@ -416,7 +464,7 @@ if [[ "${local_fail}" -gt 0 || "${copyfail_n}" -gt 0 ]]; then
         details+="\nChunks processed OK but results could NOT be copied to ${TOMO_RESULTS_MOUNT} (kept on scratch under ${RUN_SCRATCH}):\n$(cat "${COPYFAIL_FILE}")\n"
     fi
     send_email "Completed with errors — ${TOMO_RUN_ID} in ${total_time}" \
-        "Processing complete.\nSucceeded: ${local_done}\nFailed: ${local_fail}\nResult-copy failures: ${copyfail_n}\n${timing}${details}\nResults: <src_dir>/field_retrieval_zpe_results/ (per source directory)\nLogs: ${LOG_DIR}"
+        "Processing complete.\nSucceeded: ${local_done}\nFailed: ${local_fail}\nResult-copy failures: ${copyfail_n}\nSkipped input files: ${skipped_n}\n${timing}${details}\nResults: <src_dir>/field_retrieval_zpe_results/ (per source directory)\nLogs: ${LOG_DIR}"
 else
     send_email "Completed successfully — ${TOMO_RUN_ID} in ${total_time}" \
         "All ${local_done} chunks processed successfully.\n${timing}\nResults: <src_dir>/field_retrieval_zpe_results/ (per source directory)\nLogs: ${LOG_DIR}"
