@@ -133,7 +133,7 @@ for batchIdx = 1:length(batchPaths)
         for sampleNum = 1:length(sampleList)
             sName = sampleList(sampleNum).name;
             logfn(sprintf('--- Processing sample %d/%d (bg %d): %s ---', sampleNum, length(sampleList), bgListNum, sName));
-            matOut = '';
+            tmpOut = '';
             % Any failure while processing one sample (corrupt data that still
             % loads, size mismatch with the background, parfor error, ...) skips
             % that sample only; the rest of the chunk keeps going.
@@ -239,15 +239,18 @@ for batchIdx = 1:length(batchPaths)
             matOut = fullfile(outDir, strcat(fileName, '.mat'));
             pngOut  = fullfile(outDir, strcat(fileName, '.png'));
             logfn(sprintf('  Saving: %s', matOut));
-            save(matOut, 'retAmplitude','retPhase','xSize','f_dx','f_dy','NA','lambda','res','ZP');
+            % Write to a .part file and rename, so a crash mid-save can never
+            % leave a truncated Field*.mat behind for Stage 2 to trust.
+            tmpOut = [matOut '.part'];
+            save(tmpOut, 'retAmplitude','retPhase','xSize','f_dx','f_dy','NA','lambda','res','ZP', '-mat');
+            movefile(tmpOut, matOut, 'f');
             logfn('  MAT file saved. Saving phase overview image...');
             saveFieldPNG(retPhase, nFrames, pngOut);
             logfn(sprintf('  Saved PNG: %s', pngOut));
             catch ME
                 logfn(sprintf('  SKIPPED %s: processing failed: %s', sName, ME.message));
                 recordSkipped(outDir, sName, 'field_Retrieval', ['processing failed: ' ME.message]);
-                % don't leave a half-written Field file for Stage 2 to pick up
-                if ~isempty(matOut) && exist(matOut, 'file'), delete(matOut); end
+                if ~isempty(tmpOut) && exist(tmpOut, 'file'), delete(tmpOut); end
             end
         end
     end

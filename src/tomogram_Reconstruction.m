@@ -51,7 +51,7 @@ for batchIdx = 1:length(batchPaths)
     sName = sampleList(sampleNum).name;
     logfn(sprintf('--- Processing %d/%d: %s ---', sampleNum, length(sampleList), sName));
 
-    matOut = '';
+    tmpOut = '';
     % A failure while reconstructing one sample (GPU error, bad data, ...)
     % skips that sample only; the remaining samples still get reconstructed.
     try
@@ -171,7 +171,9 @@ for batchIdx = 1:length(batchPaths)
     matOut = fullfile(outDir, strcat(fileName, '.mat'));
     pngOut  = fullfile(outDir, strcat(fileName, '.png'));
     logfn(sprintf('  Saving: %s', matOut));
-    save(matOut, 'Reconimg','res3','res4','lambda','excludeFrame');
+    tmpOut = [matOut '.part'];  % atomic write, see field_Retrieval.m
+    save(tmpOut, 'Reconimg','res3','res4','lambda','excludeFrame', '-mat');
+    movefile(tmpOut, matOut, 'f');
     logfn('  MAT file saved.');
     tomoFiles{end+1} = matOut; %#ok<SAGROW>
 
@@ -188,9 +190,7 @@ for batchIdx = 1:length(batchPaths)
     catch ME
         logfn(sprintf('  SKIPPED %s: reconstruction failed: %s', sName, ME.message));
         recordSkipped(outDir, sName, 'tomogram_Reconstruction', ['reconstruction failed: ' ME.message]);
-        % drop a half-written tomogram and its list entry
-        if ~isempty(matOut) && exist(matOut, 'file'), delete(matOut); end
-        tomoFiles(strcmp(tomoFiles, matOut)) = [];
+        if ~isempty(tmpOut) && exist(tmpOut, 'file'), delete(tmpOut); end
         try reset(gpuDevice); catch, end  % free GPU memory after e.g. an OOM
     end
     end
