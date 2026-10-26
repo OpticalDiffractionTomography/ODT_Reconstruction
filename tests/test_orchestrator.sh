@@ -8,77 +8,8 @@
 # test extracts the functions it needs by name and runs them in a subshell
 # with a fresh scratch directory.
 
-set -u
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ORCH="${ROOT}/scripts/orchestrator.sh"
-TMP_ROOT="$(mktemp -d)"
-trap 'rm -rf "${TMP_ROOT}"' EXIT
-
-PASS=0
-FAIL=0
-
-# Print the source of function $1 from orchestrator.sh
-extract_fn() {
-    awk -v n="$1" 'index($0, n "() {") == 1 {p=1} p {print} p && $0 == "}" {exit}' "${ORCH}"
-}
-
-# Load the named functions into the current shell
-load_fns() {
-    local f src
-    for f in "$@"; do
-        src="$(extract_fn "${f}")"
-        [[ -n "${src}" ]] || { echo "cannot extract function ${f}"; exit 99; }
-        eval "${src}"
-    done
-}
-
-# Fresh state for one test: sets RUN_SCRATCH, STATE_DIR and the state files
-setup_env() {
-    local d
-    d="$(mktemp -d -p "${TMP_ROOT}")"
-    RUN_SCRATCH="${d}/run"
-    STATE_DIR="${RUN_SCRATCH}/state"
-    LOG_DIR="${RUN_SCRATCH}/logs"
-    mkdir -p "${STATE_DIR}" "${LOG_DIR}"
-    CHUNKS_FILE="${STATE_DIR}/chunks.txt"
-    ACTIVE_FILE="${STATE_DIR}/active_jobs.txt"
-    DONE_FILE="${STATE_DIR}/done_chunks.txt"
-    FAIL_FILE="${STATE_DIR}/failed_chunks.txt"
-    COPYFAIL_FILE="${STATE_DIR}/copyfail_chunks.txt"
-    SKIPPED_FILE="${STATE_DIR}/skipped_files.txt"
-    RETRIED_FILE="${STATE_DIR}/retried_chunks.txt"
-    SUBMIT_TIMES_FILE="${STATE_DIR}/submit_times.txt"
-    DURATIONS_FILE="${STATE_DIR}/chunk_durations.txt"
-    TOMO_DATA_MOUNT="${d}/data"
-    TOMO_RESULTS_MOUNT="${d}/results"
-    TOMO_RUN_ID="run1"
-    : > "${CHUNKS_FILE}"; : > "${ACTIVE_FILE}"; : > "${DONE_FILE}"; : > "${FAIL_FILE}"
-    : > "${COPYFAIL_FILE}"; : > "${SKIPPED_FILE}"; : > "${RETRIED_FILE}"
-    : > "${SUBMIT_TIMES_FILE}"; : > "${DURATIONS_FILE}"
-    log() { :; }
-}
-
-# run NAME FUNCTION — run a test function in a subshell and tally the result
-run() {
-    local name="$1" fn="$2" out rc
-    # Capture the status rather than testing the subshell in an `if`: bash
-    # ignores `set -e` inside a command that is part of a condition, which
-    # would let every assertion but the last pass silently.
-    out="$( ( set -e; setup_env; "${fn}" ) 2>&1 )"; rc=$?
-    if [[ "${rc}" -eq 0 ]]; then
-        PASS=$(( PASS + 1 )); echo "  ok    ${name}"
-    else
-        FAIL=$(( FAIL + 1 )); echo "  FAIL  ${name}"; echo "${out}" | sed 's/^/        /'
-    fi
-}
-
-assert_eq() {  # expected actual [message]
-    [[ "$1" == "$2" ]] || { echo "expected: [$1]"; echo "actual:   [$2]"; echo "${3:-assertion failed}"; return 1; }
-}
-assert_file_lines() {  # file expected_count
-    local n; n=$(wc -l < "$1")
-    [[ "${n}" -eq "$2" ]] || { echo "$1 has ${n} line(s), expected $2"; cat "$1"; return 1; }
-}
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+SRC_FILE="${REPO_ROOT}/scripts/orchestrator.sh"
 
 # ── job_active ────────────────────────────────────────────────────────────────
 test_job_active_running() {
@@ -339,11 +270,4 @@ test_collect_orphaned_chunk_without_outcome_counts_as_failed() {
     assert_file_lines "${FAIL_FILE}" 1
 }
 
-# ── main ──────────────────────────────────────────────────────────────────────
-echo "orchestrator.sh"
-for fn in $(declare -F | awk '{print $3}' | grep '^test_'); do
-    run "${fn#test_}" "${fn}"
-done
-echo
-echo "${PASS} passed, ${FAIL} failed"
-[[ "${FAIL}" -eq 0 ]]
+run_all "orchestrator.sh"
