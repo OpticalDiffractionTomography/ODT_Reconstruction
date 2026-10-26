@@ -51,8 +51,21 @@ for batchIdx = 1:length(batchPaths)
     sName = sampleList(sampleNum).name;
     logfn(sprintf('--- Processing %d/%d: %s ---', sampleNum, length(sampleList), sName));
 
+    tmpOut = '';
+    % A failure while reconstructing one sample (GPU error, bad data, ...)
+    % skips that sample only; the remaining samples still get reconstructed.
+    try
     logfn(sprintf('  Loading %s...', sName));
-    load(fullfile(outDir, sName));
+    [S, loadErr] = loadMatSafe(fullfile(outDir, sName), ...
+        {'retPhase','retAmplitude','xSize','f_dx','f_dy','NA','lambda','res','ZP'});
+    if ~isempty(loadErr)
+        logfn(sprintf('  SKIPPED %s: %s', sName, loadErr));
+        recordSkipped(outDir, sName, 'tomogram_Reconstruction', loadErr);
+        continue
+    end
+    retPhase = S.retPhase; retAmplitude = S.retAmplitude; xSize = S.xSize;
+    f_dx = S.f_dx; f_dy = S.f_dy; NA = S.NA; lambda = S.lambda; res = S.res;
+    clear S
     [xx, yy, frame] = size(retPhase);
     logfn(sprintf('  Loaded: retPhase size %dx%dx%d', xx, yy, frame));
 
@@ -158,7 +171,9 @@ for batchIdx = 1:length(batchPaths)
     matOut = fullfile(outDir, strcat(fileName, '.mat'));
     pngOut  = fullfile(outDir, strcat(fileName, '.png'));
     logfn(sprintf('  Saving: %s', matOut));
-    save(matOut, 'Reconimg','res3','res4','lambda','excludeFrame');
+    tmpOut = [matOut '.part'];  % atomic write, see field_Retrieval.m
+    save(tmpOut, 'Reconimg','res3','res4','lambda','excludeFrame', '-mat');
+    movefile(tmpOut, matOut, 'f');
     logfn('  MAT file saved.');
     tomoFiles{end+1} = matOut; %#ok<SAGROW>
 
@@ -172,6 +187,12 @@ for batchIdx = 1:length(batchPaths)
     logfn(sprintf('  Saving PNG: %s', pngOut));
     saveTomogramPNG(Reconimg, n_s, pngOut);
     logfn('  PNG saved.');
+    catch ME
+        logfn(sprintf('  SKIPPED %s: reconstruction failed: %s', sName, ME.message));
+        recordSkipped(outDir, sName, 'tomogram_Reconstruction', ['reconstruction failed: ' ME.message]);
+        if ~isempty(tmpOut) && exist(tmpOut, 'file'), delete(tmpOut); end
+        try reset(gpuDevice); catch, end  % free GPU memory after e.g. an OOM
+    end
     end
 
     %% TIFF export (alice): one pass over this batch's tomograms after all
@@ -185,11 +206,41 @@ for batchIdx = 1:length(batchPaths)
         tomoFiles = sort(tomoFiles);
         logfn(sprintf('TIFF export: %d tomogram(s), batch name "%s", numbering from %03d', ...
             length(tomoFiles), tiffBatchName, tiff_offset+1));
+        % Exact per-sample numbers from the orchestrator (sample name -> NNN),
+        % so skipped or retried samples never shift their neighbours' numbers.
+        % Samples not listed fall back to tiff_offset + position in this run.
+        tiffIdx = containers.Map('KeyType', 'char', 'ValueType', 'double');
+        tiffIdxFile = fullfile(spath, 'tiff_index.txt');
+        if isempty(batchDirs) && exist(tiffIdxFile, 'file')
+            fidIdx = fopen(tiffIdxFile, 'r');
+            C = textscan(fidIdx, '%s%f', 'Delimiter', '\t');
+            fclose(fidIdx);
+            for q = 1:numel(C{2})
+                tiffIdx(C{1}{q}) = C{2}(q);
+            end
+        end
         for tomoNum = 1:length(tomoFiles)
-            S = load(tomoFiles{tomoNum}, 'Reconimg');
-            tifOut = fullfile(outDir, strcat(tiffBatchName, sprintf('%03d', tiff_offset+tomoNum), '_Tomo.tif'));
+            [S, loadErr] = loadMatSafe(tomoFiles{tomoNum}, {'Reconimg'});
+            if ~isempty(loadErr)
+                logfn(sprintf('  SKIPPED TIFF for %s: %s', tomoFiles{tomoNum}, loadErr));
+                recordSkipped(outDir, tomoFiles{tomoNum}, 'tiff_export', loadErr);
+                continue
+            end
+            [~, tomoBase] = fileparts(tomoFiles{tomoNum});
+            sampleBase = regexprep(tomoBase, '^Tomogram_Field_', '');
+            if isKey(tiffIdx, sampleBase)
+                tiffNum = tiffIdx(sampleBase);
+            else
+                tiffNum = tiff_offset + tomoNum;
+            end
+            tifOut = fullfile(outDir, strcat(tiffBatchName, sprintf('%03d', tiffNum), '_Tomo.tif'));
             logfn(sprintf('  Saving TIFF: %s', tifOut));
-            saveTomogramTIFF(S.Reconimg, tifOut);
+            try
+                saveTomogramTIFF(S.Reconimg, tifOut);
+            catch ME
+                logfn(sprintf('  SKIPPED TIFF %s: %s', tifOut, ME.message));
+                recordSkipped(outDir, tifOut, 'tiff_export', ME.message);
+            end
         end
     end
 

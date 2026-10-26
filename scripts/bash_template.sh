@@ -59,6 +59,9 @@ cleanup_on_fail() {
     exit 1
 }
 trap cleanup_on_fail ERR
+# SLURM sends SIGTERM at the walltime limit (and on scancel); without this the
+# job would vanish with neither marker and the orchestrator would not notice.
+trap cleanup_on_fail TERM
 
 module load matlab/R2023a
 module load cuda/11.6.0
@@ -83,8 +86,19 @@ log "=== Job start: __JOB_NAME__ ==="
 log "Data dir : ${DATA_DIR}"
 log "Version  : ${VERSION}"
 
-run_stage field_Retrieval.m "pipeline_version='${VERSION}'; "
-run_stage tomogram_Reconstruction.m "n_m=${NM}; pipeline_version='${VERSION}'; batch_name='${BATCH_NAME_M}'; tiff_offset=${TIFF_OFFSET}; "
+# If Stage 1 dies part-way (e.g. a MATLAB crash on one sample), still
+# reconstruct the Field files it finished — their results are valid. The chunk
+# is then reported as failed so the orchestrator retries the unfinished samples.
+stage_failed=0
+run_stage field_Retrieval.m "pipeline_version='${VERSION}'; " || stage_failed=1
+
+if compgen -G "${DATA_DIR}/field_retrieval/Field*.mat" > /dev/null; then
+    run_stage tomogram_Reconstruction.m "n_m=${NM}; pipeline_version='${VERSION}'; batch_name='${BATCH_NAME_M}'; tiff_offset=${TIFF_OFFSET}; " || stage_failed=1
+else
+    log "No Field*.mat files produced — skipping tomogram_Reconstruction"
+fi
+
+[[ "${stage_failed}" -eq 0 ]] || cleanup_on_fail
 
 # Signal success — the login-node orchestrator will rsync results from
 # ${DATA_DIR}/field_retrieval/ back to the results mount.

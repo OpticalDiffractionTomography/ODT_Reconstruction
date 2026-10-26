@@ -28,6 +28,8 @@ Usage:
 
   tomo_process --status <run_id>   Show status of a running/finished run
   tomo_process --resume <run_id>   Resume after login node crash/disconnect
+  tomo_process --restart <run_id>  Restart only the orchestrator of a running run
+                                   (jobs keep running; picks up updated scripts)
   tomo_process --list              List all runs
   tomo_process --cancel <run_id>   Cancel an active run
 
@@ -485,6 +487,30 @@ cmd_resume() {
     info "  tomo_process --status ${run_id}"
 }
 
+# ── Sub-command: restart ──────────────────────────────────────────────────────
+# Stop only the orchestrator process (SLURM jobs keep running) and resume it,
+# so a run in progress picks up updated orchestrator.sh logic. A running bash
+# script is not reloaded when its file changes, hence the restart.
+cmd_restart() {
+    local run_id="$1"
+    local pid_file="${SCRATCH_ROOT}/${run_id}/state/orchestrator.pid"
+    [[ -d "${SCRATCH_ROOT}/${run_id}" ]] || die "Run not found: ${run_id}"
+    if [[ -f "${pid_file}" ]]; then
+        local pid
+        pid=$(cat "${pid_file}")
+        if kill -0 "${pid}" 2>/dev/null; then
+            kill "${pid}" && info "Stopped orchestrator (pid ${pid}); SLURM jobs are left running"
+            local i
+            for i in 1 2 3 4 5 6 7 8 9 10; do
+                kill -0 "${pid}" 2>/dev/null || break
+                sleep 1
+            done
+            kill -0 "${pid}" 2>/dev/null && die "Orchestrator (pid ${pid}) did not stop"
+        fi
+    fi
+    cmd_resume "${run_id}"
+}
+
 # ── Dispatch ──────────────────────────────────────────────────────────────────
 [[ $# -eq 0 ]] && { usage; exit 1; }
 
@@ -492,6 +518,7 @@ case "$1" in
     --help|-h)   usage ;;
     --list)      cmd_list ;;
     --resume)    [[ $# -ge 2 ]] || die "--resume requires a run_id"; cmd_resume "$2" ;;
+    --restart)   [[ $# -ge 2 ]] || die "--restart requires a run_id"; cmd_restart "$2" ;;
     --status)    [[ $# -ge 2 ]] || die "--status requires a run_id"; cmd_status "$2" ;;
     --cancel)    [[ $# -ge 2 ]] || die "--cancel requires a run_id"; cmd_cancel "$2" ;;
     *)           cmd_start "$@" ;;

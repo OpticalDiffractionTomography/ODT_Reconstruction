@@ -434,3 +434,25 @@ tmux new -s setup
 Once `tomo_process` is running, this is not needed — it detaches automatically.
 
 </details>
+
+## Tests
+
+```bash
+bash tests/run_tests.sh
+```
+
+Shell tests need only bash (`squeue`, `rsync`, `sbatch` and `matlab` are mocked):
+
+| File | Covers |
+|---|---|
+| `tests/test_orchestrator.sh` | Failure handling in `scripts/orchestrator.sh`: retry/bisection, salvage copy, lost-job detection, TIFF index |
+| `tests/test_submit_chunk.sh` | Staging and submission: background/sample copy, skipped files, job-script filling, TIFF offset/index |
+| `tests/test_job_template.sh` | The real `scripts/bash_template.sh` against a fake `matlab`: DONE/FAIL markers, Stage 1 crash handling, SIGTERM |
+| `tests/test_tomo_process.sh` | `tomo_process --restart/--resume/--cancel` and argument handling |
+
+MATLAB unit tests run automatically if `matlab` is on `PATH`, or manually with `runtests('tests')` from the repo root:
+
+| File | Covers |
+|---|---|
+| `tests/tLoadMatSafe.m` | `loadMatSafe`, `recordSkipped` (corrupt, truncated and incomplete MAT files) |
+| `tests/tHelpers.m` | `mk_ellipse`, `PhiShift`, `phaseCompensation`, `saveTomogramTIFF`, `saveTomogramPNG`, `saveInspectionPNG` |
