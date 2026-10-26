@@ -206,11 +206,41 @@ for batchIdx = 1:length(batchPaths)
         tomoFiles = sort(tomoFiles);
         logfn(sprintf('TIFF export: %d tomogram(s), batch name "%s", numbering from %03d', ...
             length(tomoFiles), tiffBatchName, tiff_offset+1));
+        % Exact per-sample numbers from the orchestrator (sample name -> NNN),
+        % so skipped or retried samples never shift their neighbours' numbers.
+        % Samples not listed fall back to tiff_offset + position in this run.
+        tiffIdx = containers.Map('KeyType', 'char', 'ValueType', 'double');
+        tiffIdxFile = fullfile(spath, 'tiff_index.txt');
+        if isempty(batchDirs) && exist(tiffIdxFile, 'file')
+            fidIdx = fopen(tiffIdxFile, 'r');
+            C = textscan(fidIdx, '%s%f', 'Delimiter', '\t');
+            fclose(fidIdx);
+            for q = 1:numel(C{2})
+                tiffIdx(C{1}{q}) = C{2}(q);
+            end
+        end
         for tomoNum = 1:length(tomoFiles)
-            S = load(tomoFiles{tomoNum}, 'Reconimg');
-            tifOut = fullfile(outDir, strcat(tiffBatchName, sprintf('%03d', tiff_offset+tomoNum), '_Tomo.tif'));
+            [S, loadErr] = loadMatSafe(tomoFiles{tomoNum}, {'Reconimg'});
+            if ~isempty(loadErr)
+                logfn(sprintf('  SKIPPED TIFF for %s: %s', tomoFiles{tomoNum}, loadErr));
+                recordSkipped(outDir, tomoFiles{tomoNum}, 'tiff_export', loadErr);
+                continue
+            end
+            [~, tomoBase] = fileparts(tomoFiles{tomoNum});
+            sampleBase = regexprep(tomoBase, '^Tomogram_Field_', '');
+            if isKey(tiffIdx, sampleBase)
+                tiffNum = tiffIdx(sampleBase);
+            else
+                tiffNum = tiff_offset + tomoNum;
+            end
+            tifOut = fullfile(outDir, strcat(tiffBatchName, sprintf('%03d', tiffNum), '_Tomo.tif'));
             logfn(sprintf('  Saving TIFF: %s', tifOut));
-            saveTomogramTIFF(S.Reconimg, tifOut);
+            try
+                saveTomogramTIFF(S.Reconimg, tifOut);
+            catch ME
+                logfn(sprintf('  SKIPPED TIFF %s: %s', tifOut, ME.message));
+                recordSkipped(outDir, tifOut, 'tiff_export', ME.message);
+            end
         end
     end
 
