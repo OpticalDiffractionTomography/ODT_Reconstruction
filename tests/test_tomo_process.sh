@@ -121,4 +121,58 @@ test_no_arguments_prints_usage_and_fails() {
     assert_contains "${TEST_DIR}/out" "Usage:"
 }
 
+# ── --upgrade (real git repos: an "origin" plus a user clone) ─────────────────
+upgrade_setup() {
+    die()  { echo "ERROR: $*" >&2; exit 1; }
+    info() { echo "[tomo_process] $*"; }
+    load_fns cmd_upgrade
+    g="git -c user.name=t -c user.email=t@example.org -c core.autocrlf=false"
+    ORIGIN="${TEST_DIR}/origin"; SCRIPT_DIR="${TEST_DIR}/clone"
+    git init -q "${ORIGIN}"
+    echo 'EMAIL=""' > "${ORIGIN}/config.sh"; echo v1 > "${ORIGIN}/code.txt"
+    ( cd "${ORIGIN}" && git add . && ${g} commit -qm one )
+    git clone -q "${ORIGIN}" "${SCRIPT_DIR}"
+    GIT_PUBLISH() {  # file content: commit a change upstream
+        ( cd "${ORIGIN}" && echo "$2" > "$1" && git add . && ${g} commit -qm up )
+    }
+}
+test_upgrade_pulls_and_keeps_local_edits() {
+    upgrade_setup
+    echo 'EMAIL="me@example.org"' > "${SCRIPT_DIR}/config.sh"
+    GIT_PUBLISH code.txt v2
+    ( cmd_upgrade ) > "${TEST_DIR}/out" 2>&1
+    assert_eq "v2" "$(cat "${SCRIPT_DIR}/code.txt")"
+    assert_contains "${SCRIPT_DIR}/config.sh" 'me@example.org'
+    [[ -z "$(git -C "${SCRIPT_DIR}" stash list)" ]]       # nothing left behind
+}
+test_upgrade_with_no_local_edits() {
+    upgrade_setup
+    GIT_PUBLISH code.txt v2
+    ( cmd_upgrade ) > "${TEST_DIR}/out" 2>&1
+    assert_eq "v2" "$(cat "${SCRIPT_DIR}/code.txt")"
+}
+test_upgrade_when_already_up_to_date() {
+    upgrade_setup
+    ( cmd_upgrade ) > "${TEST_DIR}/out" 2>&1
+    assert_contains "${TEST_DIR}/out" "Already up to date"
+}
+test_upgrade_conflict_keeps_changes_in_stash() {
+    upgrade_setup
+    echo 'EMAIL="me@example.org"' > "${SCRIPT_DIR}/config.sh"
+    GIT_PUBLISH config.sh 'EMAIL="other"'
+    ( cmd_upgrade ) > "${TEST_DIR}/out" 2>&1 && return 1
+    assert_contains "${TEST_DIR}/out" "conflict"
+    git -C "${SCRIPT_DIR}" stash list | grep -q tomo_process-upgrade
+}
+test_upgrade_outside_git_checkout_fails() {
+    upgrade_setup
+    rm -rf "${SCRIPT_DIR}/.git"
+    ( cmd_upgrade ) > "${TEST_DIR}/out" 2>&1 && return 1
+    assert_contains "${TEST_DIR}/out" "not a git checkout"
+}
+test_help_lists_upgrade() {
+    bash "${REPO_ROOT}/tomo_process" --help > "${TEST_DIR}/out" 2>&1
+    assert_contains "${TEST_DIR}/out" "--upgrade"
+}
+
 run_all "tomo_process"

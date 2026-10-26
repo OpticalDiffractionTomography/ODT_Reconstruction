@@ -1,0 +1,15 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  shell-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # MATLAB tests are skipped automatically (no matlab on PATH)
+      - name: Run tests
+        run: bash tests/run_tests.sh

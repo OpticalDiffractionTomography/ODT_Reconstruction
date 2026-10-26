@@ -215,6 +215,16 @@ tomo_process --resume tomo_20260729_143201   # continue from where it stopped
 
 ---
 
+## Updating to the latest version
+
+```bash
+tomo_process --upgrade
+```
+
+This pulls the newest code and keeps your local edits (such as the email in `config.sh`). If the update ever conflicts with your edits, your changes stay safe in `git stash list` and the command tells you so. Runs already in progress keep using the old code until you run `tomo_process --restart <run_id>`.
+
+---
+
 ## Data requirements
 
 The pipeline accepts two kinds of folder layout — use whichever matches how your experiment was recorded.
@@ -448,7 +458,7 @@ Shell tests need only bash (`squeue`, `rsync`, `sbatch` and `matlab` are mocked)
 | `tests/test_orchestrator.sh` | Failure handling in `scripts/orchestrator.sh`: retry/bisection, salvage copy, lost-job detection, TIFF index |
 | `tests/test_submit_chunk.sh` | Staging and submission: background/sample copy, skipped files, job-script filling, TIFF offset/index |
 | `tests/test_job_template.sh` | The real `scripts/bash_template.sh` against a fake `matlab`: DONE/FAIL markers, Stage 1 crash handling, SIGTERM |
-| `tests/test_tomo_process.sh` | `tomo_process --restart/--resume/--cancel` and argument handling |
+| `tests/test_tomo_process.sh` | `tomo_process --restart/--resume/--cancel/--upgrade` and argument handling |
 
 MATLAB unit tests run automatically if `matlab` is on `PATH`, or manually with `runtests('tests')` from the repo root:
 
