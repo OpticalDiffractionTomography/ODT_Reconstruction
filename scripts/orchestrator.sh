@@ -36,6 +36,8 @@ FAIL_FILE="${STATE_DIR}/failed_chunks.txt"
 COPYFAIL_FILE="${STATE_DIR}/copyfail_chunks.txt"
 # Input files the job skipped as unreadable/corrupt: chunk <TAB> file <TAB> reason
 SKIPPED_FILE="${STATE_DIR}/skipped_files.txt"
+# Failed chunks whose unfinished samples were re-queued (recovered, not lost)
+RETRIED_FILE="${STATE_DIR}/retried_chunks.txt"
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 # stdout/stderr are already redirected to ORCH_LOG by nohup in tomo_process;
@@ -173,7 +175,7 @@ else
     # No "started" email from here — the first chunk job carries SLURM
     # --mail-type=BEGIN and notifies the user when processing actually starts.
 fi
-touch "${COPYFAIL_FILE}" "${SKIPPED_FILE}"
+touch "${COPYFAIL_FILE}" "${SKIPPED_FILE}" "${RETRIED_FILE}"
 # Resumed runs started before duration tracking existed: approximate the run
 # start with the chunk list's creation time so the summary still has a total.
 [[ -f "${STATE_DIR}/run_start_epoch" ]] || stat -c %Y "${CHUNKS_FILE}" > "${STATE_DIR}/run_start_epoch"
@@ -295,8 +297,24 @@ requeue_unfinished() {
     IFS=',' read -ra rem <<< "${remaining}"
     n=${#rem[@]}
     if [[ "${n}" -eq 1 ]]; then
-        log "  ${cid}: $(basename "${rem[0]}") fails the job on its own — giving up on it"
-        echo "${cid}"$'	'"$(basename "${rem[0]}")"$'	'"job crashed, timed out or ran out of memory on this file (see logs)" >> "${SKIPPED_FILE}"
+        # One extra attempt before giving up, so a one-off node failure or
+        # OOM-kill on a lone file is not reported as a bad file.
+        local key retry_dir="${STATE_DIR}/single_retry"
+        mkdir -p "${retry_dir}"
+        key=$(printf '%s' "${rem[0]}" | cksum | cut -d' ' -f1)
+        if [[ ! -f "${retry_dir}/${key}" ]]; then
+            touch "${retry_dir}/${key}"
+            k=$(( $(cat "${STATE_DIR}/retry_counter" 2>/dev/null || echo 0) + 1 ))
+            echo "${k}" > "${STATE_DIR}/retry_counter"
+            ncid=$(printf "retry%04d" "${k}")
+            printf '%s\t%s\t%s\n' "${ncid}" "${src_dir}" "${rem[0]}" >> "${CHUNKS_FILE}"
+            echo "${cid} -> ${ncid}" >> "${RETRIED_FILE}"
+            log "  ${cid}: $(basename "${rem[0]}") failed alone — one more attempt as ${ncid}"
+            REQUEUE_RESULT="retry"
+            return 0
+        fi
+        log "  ${cid}: $(basename "${rem[0]}") failed again on its own — giving up on it"
+        printf '%s\t%s\t%s\n' "${cid}" "$(basename "${rem[0]}")" "job crashed, timed out or ran out of memory on this file, twice (see logs)" >> "${SKIPPED_FILE}"
         REQUEUE_RESULT="skipped"
         return 0
     fi
@@ -306,9 +324,10 @@ requeue_unfinished() {
         k=$(( $(cat "${STATE_DIR}/retry_counter" 2>/dev/null || echo 0) + 1 ))
         echo "${k}" > "${STATE_DIR}/retry_counter"
         ncid=$(printf "retry%04d" "${k}")
-        echo "${ncid}"$'	'"${src_dir}"$'	'"$(IFS=','; echo "${rem[*]:${lo}:${hi}}")" >> "${CHUNKS_FILE}"
+        echo "${ncid}"$'\t'"${src_dir}"$'\t'"$(IFS=','; echo "${rem[*]:${lo}:${hi}}")" >> "${CHUNKS_FILE}"
         log "  ${cid}: re-queued ${hi} unfinished sample(s) as ${ncid}"
     done
+    echo "${cid} -> bisected into ${n} unfinished sample(s)" >> "${RETRIED_FILE}"
     REQUEUE_RESULT="retry"
 }
 
@@ -318,6 +337,18 @@ collect_finished() {
     while IFS=$'\t' read -r cid jid; do
         local done_marker="${RUN_SCRATCH}/${cid}/DONE"
         local fail_marker="${RUN_SCRATCH}/${cid}/FAIL"
+
+        # An orchestrator killed (e.g. by --restart) between removing a chunk's
+        # scratch dir and recording its outcome re-adopts it here with nothing
+        # left to inspect. Drop it if its outcome was recorded; otherwise count
+        # it as failed so the run can still finish.
+        if [[ ! -d "${RUN_SCRATCH}/${cid}" ]]; then
+            if ! grep -qx "${cid}" "${DONE_FILE}" "${FAIL_FILE}" 2>/dev/null; then
+                log "WARNING: scratch dir for ${cid} is gone and no outcome was recorded — counting it as failed"
+                echo "${cid}" >> "${FAIL_FILE}"
+            fi
+            continue
+        fi
 
         if [[ -f "${done_marker}" ]]; then
             local dur
@@ -339,8 +370,8 @@ collect_finished() {
             copy_chunk_results "${cid}" || copy_ok=0
             # Then retry whatever never finished, in smaller chunks, so one bad
             # sample (or a walltime/OOM kill) cannot take its neighbours down.
-            files_csv=$(awk -F'	' -v c="${cid}" '$1==c {print $3}' "${CHUNKS_FILE}")
-            src_dir=$(awk -F'	' -v c="${cid}" '$1==c {print $2}' "${CHUNKS_FILE}")
+            files_csv=$(awk -F'\t' -v c="${cid}" '$1==c {print $3}' "${CHUNKS_FILE}")
+            src_dir=$(awk -F'\t' -v c="${cid}" '$1==c {print $2}' "${CHUNKS_FILE}")
             requeue_unfinished "${cid}" "${src_dir}" "$(unfinished_files "${cid}" "${files_csv}")"
             if [[ "${copy_ok}" -eq 1 ]]; then
                 rm -rf "${RUN_SCRATCH:?}/${cid}"
@@ -369,8 +400,7 @@ collect_finished() {
                     touch "${fail_marker}"
                 fi
             fi
-            still_active+="${cid}"$'	'"${jid}"$'
-'
+            still_active+="${cid}"$'\t'"${jid}"$'\n'
         fi
     done < "${ACTIVE_FILE}"
     printf "%s" "${still_active}" > "${ACTIVE_FILE}"
@@ -403,10 +433,19 @@ submit_chunk() {
     IFS=',' read -ra flist <<< "${files_csv}"
     # A sample that cannot be staged (unreadable/corrupt on the source) is
     # skipped and reported; it must not block the rest of the chunk.
-    local staged=0
+    local staged=0 tiff_idx
+    : > "${chunk_data}/tiff_index.txt"
     for fpath in "${flist[@]}"; do
         if rsync -a "${fpath}" "${chunk_data}/"; then
             staged=$(( staged + 1 ))
+            # Stable 1-based position of this sample among all samples of its
+            # source dir (sorted order), independent of chunking, skips and
+            # retries; used for alice TIFF numbering.
+            tiff_idx=$(awk -v d="${src_dir}" -v f="${fpath}" \
+                '{p=$0; sub(/\/[^\/]*$/, "", p)} p==d {n++; if ($0==f) {print n; exit}}' \
+                "${STATE_DIR}/pending_files.txt")
+            [[ -n "${tiff_idx}" ]] && \
+                printf '%s\t%s\n' "$(basename "${fpath}" .mat)" "${tiff_idx}" >> "${chunk_data}/tiff_index.txt"
         else
             log "WARNING: rsync failed for ${fpath} — skipping this file"
             rm -f "${chunk_data}/$(basename "${fpath}")"
@@ -423,7 +462,9 @@ submit_chunk() {
     # dir is a flat staging folder, so pass the source dir's name as the batch
     # name, plus the number of samples from this source dir in earlier chunks
     # so NNN continues across chunks instead of restarting (and overwriting
-    # sibling chunks' TIFFs in the shared results dir).
+    # sibling chunks' TIFFs in the shared results dir). tiff_index.txt (written
+    # above) gives each sample its exact number; tiff_offset is only the
+    # fallback for samples missing from it.
     local batch_name tiff_offset
     batch_name="$(basename "${src_dir}")"
     tiff_offset=$(awk -F'\t' -v c="${cid}" -v d="${src_dir}" \
@@ -538,6 +579,10 @@ log "=== All done in ${total_time}: ${local_done} succeeded, ${local_fail} faile
 
 timing="\nTotal time: ${total_time}\n\nPer-chunk times (queue + run):\n$(cat "${DURATIONS_FILE}")\n"
 
+retried_n=$(wc -l < "${RETRIED_FILE}")
+if [[ "${retried_n}" -gt 0 ]]; then
+    timing+="\n${retried_n} chunk failure(s) were retried automatically:\n$(sed 's/^/  /' "${RETRIED_FILE}")\n"
+fi
 skipped_n=$(wc -l < "${SKIPPED_FILE}")
 if [[ "${skipped_n}" -gt 0 ]]; then
     timing+="\nSkipped ${skipped_n} unreadable/corrupt input file(s) (all other samples were processed and copied):\n$(awk -F'\t' '{print "  " $1 ": " $2 " — " $3}' "${SKIPPED_FILE}")\n"
