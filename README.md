@@ -434,3 +434,12 @@ tmux new -s setup
 Once `tomo_process` is running, this is not needed — it detaches automatically.
 
 </details>
+
+## Tests
+
+```bash
+bash tests/run_tests.sh
+```
+
+- `tests/test_orchestrator.sh` — shell tests for the failure handling in `scripts/orchestrator.sh` (retry/bisection, salvage copy, lost-job detection, TIFF index). Needs only bash; `squeue` and `rsync` are mocked.
+- `tests/tLoadMatSafe.m` — MATLAB unit tests for `loadMatSafe` and `recordSkipped` (corrupt, truncated and incomplete MAT files). Run automatically if `matlab` is on `PATH`, or manually with `runtests('tests')` from the repo root.

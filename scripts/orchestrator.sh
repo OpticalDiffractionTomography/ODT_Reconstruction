@@ -406,6 +406,15 @@ collect_finished() {
     printf "%s" "${still_active}" > "${ACTIVE_FILE}"
 }
 
+# Stable 1-based position of sample file $2 among all samples of source dir $1
+# (sorted order of pending_files.txt), independent of chunking, skips and
+# retries; used for alice TIFF numbering. Prints nothing if not found.
+sample_index() {
+    awk -v d="$1" -v f="$2" \
+        '{p=$0; sub(/\/[^\/]*$/, "", p)} p==d {n++; if ($0==f) {print n; exit}}' \
+        "${STATE_DIR}/pending_files.txt"
+}
+
 submit_chunk() {
     local cid="$1" src_dir="$2" files_csv="$3"
     local chunk_scratch="${RUN_SCRATCH}/${cid}"
@@ -438,12 +447,7 @@ submit_chunk() {
     for fpath in "${flist[@]}"; do
         if rsync -a "${fpath}" "${chunk_data}/"; then
             staged=$(( staged + 1 ))
-            # Stable 1-based position of this sample among all samples of its
-            # source dir (sorted order), independent of chunking, skips and
-            # retries; used for alice TIFF numbering.
-            tiff_idx=$(awk -v d="${src_dir}" -v f="${fpath}" \
-                '{p=$0; sub(/\/[^\/]*$/, "", p)} p==d {n++; if ($0==f) {print n; exit}}' \
-                "${STATE_DIR}/pending_files.txt")
+            tiff_idx=$(sample_index "${src_dir}" "${fpath}")
             [[ -n "${tiff_idx}" ]] && \
                 printf '%s\t%s\n' "$(basename "${fpath}" .mat)" "${tiff_idx}" >> "${chunk_data}/tiff_index.txt"
         else
