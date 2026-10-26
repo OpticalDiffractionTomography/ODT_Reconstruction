@@ -51,8 +51,21 @@ for batchIdx = 1:length(batchPaths)
     sName = sampleList(sampleNum).name;
     logfn(sprintf('--- Processing %d/%d: %s ---', sampleNum, length(sampleList), sName));
 
+    matOut = '';
+    % A failure while reconstructing one sample (GPU error, bad data, ...)
+    % skips that sample only; the remaining samples still get reconstructed.
+    try
     logfn(sprintf('  Loading %s...', sName));
-    load(fullfile(outDir, sName));
+    [S, loadErr] = loadMatSafe(fullfile(outDir, sName), ...
+        {'retPhase','retAmplitude','xSize','f_dx','f_dy','NA','lambda','res','ZP'});
+    if ~isempty(loadErr)
+        logfn(sprintf('  SKIPPED %s: %s', sName, loadErr));
+        recordSkipped(outDir, sName, 'tomogram_Reconstruction', loadErr);
+        continue
+    end
+    retPhase = S.retPhase; retAmplitude = S.retAmplitude; xSize = S.xSize;
+    f_dx = S.f_dx; f_dy = S.f_dy; NA = S.NA; lambda = S.lambda; res = S.res;
+    clear S
     [xx, yy, frame] = size(retPhase);
     logfn(sprintf('  Loaded: retPhase size %dx%dx%d', xx, yy, frame));
 
@@ -172,6 +185,14 @@ for batchIdx = 1:length(batchPaths)
     logfn(sprintf('  Saving PNG: %s', pngOut));
     saveTomogramPNG(Reconimg, n_s, pngOut);
     logfn('  PNG saved.');
+    catch ME
+        logfn(sprintf('  SKIPPED %s: reconstruction failed: %s', sName, ME.message));
+        recordSkipped(outDir, sName, 'tomogram_Reconstruction', ['reconstruction failed: ' ME.message]);
+        % drop a half-written tomogram and its list entry
+        if ~isempty(matOut) && exist(matOut, 'file'), delete(matOut); end
+        tomoFiles(strcmp(tomoFiles, matOut)) = [];
+        try reset(gpuDevice); catch, end  % free GPU memory after e.g. an OOM
+    end
     end
 
     %% TIFF export (alice): one pass over this batch's tomograms after all

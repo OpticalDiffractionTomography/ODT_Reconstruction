@@ -43,6 +43,10 @@ for batchIdx = 1:length(batchPaths)
     logFile = fullfile(outDir, 'field_retrieval.log');
     fid = fopen(logFile, 'w');
     logfn = @(msg) fprintf(fid, '[%s] %s\n', datestr(now,'yyyy-mm-dd HH:MM:SS'), msg);
+    % Stale list from an earlier run in the same folder would be misleading
+    if exist(fullfile(outDir, 'skipped_files.txt'), 'file')
+        delete(fullfile(outDir, 'skipped_files.txt'));
+    end
     logfn('=== field_Retrieval started ===');
     logfn(sprintf('spath: %s', spath));
     logfn(sprintf('batch: %s', batchPath));
@@ -71,7 +75,15 @@ for batchIdx = 1:length(batchPaths)
     for bgListNum = 1:length(bglist)
         bgName = bglist(bgListNum).name;
         logfn(sprintf('=== Background %d/%d: %s ===', bgListNum, length(bglist), bgName));
-        load(fullfile(batchPath, bgName));
+        % A corrupt background only invalidates samples paired with it
+        [S, loadErr] = loadMatSafe(fullfile(batchPath, bgName), {'tomogMap','NA','lambda','res'});
+        if ~isempty(loadErr)
+            logfn(sprintf('  SKIPPED background %s: %s', bgName, loadErr));
+            recordSkipped(outDir, bgName, 'field_Retrieval', loadErr);
+            continue
+        end
+        tomogMap = S.tomogMap; NA = S.NA; lambda = S.lambda; res = S.res;
+        clear S
         img = double(squeeze(tomogMap(:,:,round(size(tomogMap,3)/3)-1)));
         img = squeeze(img);
         ii = length(img);
@@ -121,9 +133,26 @@ for batchIdx = 1:length(batchPaths)
         for sampleNum = 1:length(sampleList)
             sName = sampleList(sampleNum).name;
             logfn(sprintf('--- Processing sample %d/%d (bg %d): %s ---', sampleNum, length(sampleList), bgListNum, sName));
+            matOut = '';
+            % Any failure while processing one sample (corrupt data that still
+            % loads, size mismatch with the background, parfor error, ...) skips
+            % that sample only; the rest of the chunk keeps going.
+            try
 
             logfn(sprintf('  Loading %s...', sName));
-            load(fullfile(batchPath, sName));
+            % The background's NA/lambda/res are kept if the sample lacks them
+            % (they were set above); a corrupt sample is skipped, not fatal.
+            [S, loadErr] = loadMatSafe(fullfile(batchPath, sName), {'tomogMap'});
+            if ~isempty(loadErr)
+                logfn(sprintf('  SKIPPED %s: %s', sName, loadErr));
+                recordSkipped(outDir, sName, 'field_Retrieval', loadErr);
+                continue
+            end
+            tomogMap = S.tomogMap;
+            if isfield(S, 'NA'),     NA     = S.NA;     end
+            if isfield(S, 'lambda'), lambda = S.lambda; end
+            if isfield(S, 'res'),    res    = S.res;    end
+            clear S
             nFrames = size(tomogMap,3);
             logfn(sprintf('  Loaded: %d frames, size %dx%d', nFrames, size(tomogMap,1), size(tomogMap,2)));
 
@@ -214,6 +243,12 @@ for batchIdx = 1:length(batchPaths)
             logfn('  MAT file saved. Saving phase overview image...');
             saveFieldPNG(retPhase, nFrames, pngOut);
             logfn(sprintf('  Saved PNG: %s', pngOut));
+            catch ME
+                logfn(sprintf('  SKIPPED %s: processing failed: %s', sName, ME.message));
+                recordSkipped(outDir, sName, 'field_Retrieval', ['processing failed: ' ME.message]);
+                % don't leave a half-written Field file for Stage 2 to pick up
+                if ~isempty(matOut) && exist(matOut, 'file'), delete(matOut); end
+            end
         end
     end
 
