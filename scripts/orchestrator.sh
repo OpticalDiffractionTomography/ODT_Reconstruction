@@ -182,11 +182,21 @@ SUBMIT_TIMES_FILE="${STATE_DIR}/submit_times.txt"
 touch "${DURATIONS_FILE}" "${SUBMIT_TIMES_FILE}"
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+# True if the SLURM job is still queued/running. squeue exits 0 with empty
+# output for a just-finished job and prints "Invalid job id" once it is purged;
+# both mean gone. Any other output (including "unable to contact controller")
+# is treated as still active, so a SLURM outage never marks jobs as lost.
+job_active() {
+    local out
+    out=$(squeue -j "$1" -h 2>&1) || true
+    [[ -n "${out}" && "${out}" != *"Invalid job id"* ]]
+}
+
 count_active() {
     local n=0
     [[ -s "${ACTIVE_FILE}" ]] || { echo 0; return 0; }
     while IFS=$'\t' read -r _cid jid; do
-        squeue -j "${jid}" -h &>/dev/null 2>&1 && n=$(( n + 1 ))
+        job_active "${jid}" && n=$(( n + 1 ))
     done < "${ACTIVE_FILE}"
     echo "${n}"
 }
@@ -243,12 +253,63 @@ copy_chunk_results() {
     # don't map to the share owner — write directly, data only.
     # --ignore-times: always overwrite existing results from a previous
     # run — the size+mtime quick-check is unreliable on network mounts
-    if rsync -r --inplace --ignore-times "${res_src}/" "${dst_dir}/"; then
+    # *.part are in-progress atomic saves from a crashed job — never copy them
+    if rsync -r --inplace --ignore-times --exclude='*.part' "${res_src}/" "${dst_dir}/"; then
         log "  Results copied for ${cid}"
         return 0
     fi
     log "WARNING: rsync to /mnt failed for ${cid} — results kept at ${res_src}/"
     return 1
+}
+
+# Sample files of a failed chunk that never produced a tomogram and were not
+# already reported as unreadable. Prints them comma-separated. Must run after
+# copy_chunk_results (which records MATLAB-reported skips) and before the
+# chunk's scratch dir is removed.
+unfinished_files() {
+    local cid="$1" files_csv="$2"
+    local res_src="${RUN_SCRATCH}/${cid}/data/field_retrieval"
+    local flist fpath base out=()
+    IFS=',' read -ra flist <<< "${files_csv}"
+    for fpath in "${flist[@]}"; do
+        base="$(basename "${fpath}" .mat)"
+        [[ -f "${res_src}/Tomogram_Field_${base}.mat" ]] && continue
+        compgen -G "${res_src}/Tomogram_Field_${base}_bg_*.mat" > /dev/null && continue
+        awk -F'\t' -v c="${cid}" -v b="${base}" '$1==c && index($2, b) {f=1} END {exit !f}' \
+            "${SKIPPED_FILE}" && continue
+        out+=("${fpath}")
+    done
+    (IFS=','; echo "${out[*]}")
+}
+
+# Re-queue the unfinished samples of a failed chunk as two smaller chunks
+# (bisection). A crash on one bad file thus isolates it in log2(N) rounds
+# while every good sample still gets processed; a walltime kill shrinks the
+# work per job until it fits. A single sample that still fails is reported
+# as skipped. Sets REQUEUE_RESULT to: retry | skipped | none.
+requeue_unfinished() {
+    local cid="$1" src_dir="$2" remaining="$3"
+    local rem n half k ncid lo hi
+    REQUEUE_RESULT="none"
+    [[ -n "${remaining}" ]] || return 0
+    IFS=',' read -ra rem <<< "${remaining}"
+    n=${#rem[@]}
+    if [[ "${n}" -eq 1 ]]; then
+        log "  ${cid}: $(basename "${rem[0]}") fails the job on its own — giving up on it"
+        echo "${cid}"$'	'"$(basename "${rem[0]}")"$'	'"job crashed, timed out or ran out of memory on this file (see logs)" >> "${SKIPPED_FILE}"
+        REQUEUE_RESULT="skipped"
+        return 0
+    fi
+    half=$(( (n + 1) / 2 ))
+    for lo in 0 "${half}"; do
+        if [[ "${lo}" -eq 0 ]]; then hi=${half}; else hi=$(( n - half )); fi
+        k=$(( $(cat "${STATE_DIR}/retry_counter" 2>/dev/null || echo 0) + 1 ))
+        echo "${k}" > "${STATE_DIR}/retry_counter"
+        ncid=$(printf "retry%04d" "${k}")
+        echo "${ncid}"$'	'"${src_dir}"$'	'"$(IFS=','; echo "${rem[*]:${lo}:${hi}}")" >> "${CHUNKS_FILE}"
+        log "  ${cid}: re-queued ${hi} unfinished sample(s) as ${ncid}"
+    done
+    REQUEUE_RESULT="retry"
 }
 
 collect_finished() {
@@ -274,15 +335,42 @@ collect_finished() {
             log "WARNING: Chunk ${cid} FAILED (job ${jid}) — logs: ${LOG_DIR}/${TOMO_RUN_ID}_${cid}.err"
             # Salvage: samples processed before the failure are still valid
             # outputs — don't throw them away along with the failed one.
-            if copy_chunk_results "${cid}"; then
+            local copy_ok=1 files_csv src_dir
+            copy_chunk_results "${cid}" || copy_ok=0
+            # Then retry whatever never finished, in smaller chunks, so one bad
+            # sample (or a walltime/OOM kill) cannot take its neighbours down.
+            files_csv=$(awk -F'	' -v c="${cid}" '$1==c {print $3}' "${CHUNKS_FILE}")
+            src_dir=$(awk -F'	' -v c="${cid}" '$1==c {print $2}' "${CHUNKS_FILE}")
+            requeue_unfinished "${cid}" "${src_dir}" "$(unfinished_files "${cid}" "${files_csv}")"
+            if [[ "${copy_ok}" -eq 1 ]]; then
                 rm -rf "${RUN_SCRATCH:?}/${cid}"
             else
                 echo "${cid}" >> "${COPYFAIL_FILE}"
             fi
-            echo "${cid}" >> "${FAIL_FILE}"
+            if [[ "${REQUEUE_RESULT}" == "none" ]]; then
+                echo "${cid}" >> "${FAIL_FILE}"
+            else
+                # Its remaining work is accounted for (retry chunks or a skipped
+                # file in the final summary), so it is not a lost chunk.
+                echo "${cid}" >> "${DONE_FILE}"
+            fi
 
         else
-            still_active+="${cid}"$'\t'"${jid}"$'\n'
+            # Neither marker: the job may have been killed outright (SIGKILL,
+            # node failure, OOM-kill) before its trap could run. If SLURM no
+            # longer knows the job, give the filesystem 2 min to show a late
+            # marker, then declare the chunk failed so it is salvaged/retried.
+            if ! job_active "${jid}"; then
+                local gone="${RUN_SCRATCH}/${cid}/JOB_GONE"
+                if [[ ! -f "${gone}" ]]; then
+                    touch "${gone}"
+                elif [[ -n "$(find "${gone}" -mmin +2 2>/dev/null)" ]]; then
+                    log "WARNING: job ${jid} for ${cid} left the queue without DONE/FAIL — treating as failed"
+                    touch "${fail_marker}"
+                fi
+            fi
+            still_active+="${cid}"$'	'"${jid}"$'
+'
         fi
     done < "${ACTIVE_FILE}"
     printf "%s" "${still_active}" > "${ACTIVE_FILE}"
